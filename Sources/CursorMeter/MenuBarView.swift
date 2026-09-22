@@ -9,6 +9,10 @@ final class MenuBarPopoverViewController: NSViewController {
     private let viewModel: UsageViewModel
     private let onLogin: () -> Void
     private let onSettings: () -> Void
+    /// When the content is hosted inside an NSMenu (menu-bar-extra style), the
+    /// action rows become real menu items and in-view controls are unreliable —
+    /// so they are omitted here.
+    private let showsActionRows: Bool
 
     /// Set by the owner so we can push a new size to the live NSPopover frame.
     /// `preferredContentSize` alone is not enough — popover only consults it on
@@ -18,6 +22,7 @@ final class MenuBarPopoverViewController: NSViewController {
     // MARK: - Root layout
 
     private let rootStack = NSStackView()
+    private var containerWidthConstraint: NSLayoutConstraint!
 
     // MARK: - State section views (swapped in updateUI)
 
@@ -31,14 +36,15 @@ final class MenuBarPopoverViewController: NSViewController {
     private let badgeLabel       = NSTextField(labelWithString: "")
     private let emailLabel       = NSTextField(labelWithString: "")
 
-    // Usage row
+    // Usage header row
     private let usageTitleLabel  = NSTextField(labelWithString: "")
+    /// Large primary figure — percent or used amount, per `planUsageUnit`.
+    private let bigValueLabel    = NSTextField(labelWithString: "")
     private let usageValueLabel  = NSTextField(labelWithString: "")
     private let refreshButton    = NSButton()
 
     // Progress row
     private let progressBar      = ColoredProgressBar()
-    private let percentLabel     = NSTextField(labelWithString: "")
 
     // Secondary metric row (hidden when no secondary data). In normal mode shows
     // On-demand; in on-demand mode shows the previous primary (Requests or Plan).
@@ -48,6 +54,7 @@ final class MenuBarPopoverViewController: NSViewController {
 
     // Allocate chart views only when the popover is first opened.
     private lazy var weeklyChartContainer = NSView()
+    private lazy var weeklyCard           = CardView()
     private lazy var weeklyChartView = WeeklyUsageChartView(frame: .zero)
     private var weeklyChartHeightConstraint: NSLayoutConstraint!
     private var weeklyChartTopConstraint: NSLayoutConstraint!
@@ -81,10 +88,11 @@ final class MenuBarPopoverViewController: NSViewController {
 
     // MARK: - Init
 
-    init(viewModel: UsageViewModel, onLogin: @escaping () -> Void, onSettings: @escaping () -> Void) {
+    init(viewModel: UsageViewModel, onLogin: @escaping () -> Void, onSettings: @escaping () -> Void, showsActionRows: Bool = true) {
         self.viewModel  = viewModel
         self.onLogin    = onLogin
         self.onSettings = onSettings
+        self.showsActionRows = showsActionRows
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -93,20 +101,31 @@ final class MenuBarPopoverViewController: NSViewController {
 
     // MARK: - loadView
 
+    /// Outer padding: 16pt all round, matching the rhythm of macOS Weather.
+    private static let paddingY: CGFloat = 16
+    private static let paddingX: CGFloat = 16
+    private static let popoverWidth: CGFloat = 300
+
     override func loadView() {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
         view = container
 
+        // The material, corner radius and shadow live in StatusBarPopover's
+        // effect view — this controller supplies layout only, so nothing here
+        // paints over the system surface.
+        // Created before buildLayout(): the menu variant drops this constraint
+        // while laying out, so it must exist by then.
+        containerWidthConstraint = container.widthAnchor.constraint(equalToConstant: Self.popoverWidth)
         configureRootStack()
         buildLayout()
 
         NSLayoutConstraint.activate([
-            rootStack.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
-            rootStack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6),
-            rootStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
-            rootStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
-            container.widthAnchor.constraint(equalToConstant: 260),
+            rootStack.topAnchor.constraint(equalTo: container.topAnchor, constant: Self.paddingY),
+            rootStack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -Self.paddingY),
+            rootStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: Self.paddingX),
+            rootStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -Self.paddingX),
+            containerWidthConstraint,
         ])
     }
 
@@ -139,8 +158,8 @@ final class MenuBarPopoverViewController: NSViewController {
             staleLabel.isHidden = true
         }
 
-        // Update row
-        if let update = viewModel.availableUpdate {
+        // Update row (menu variant surfaces this as a menu item instead)
+        if let update = viewModel.availableUpdate, showsActionRows {
             updateButton.title = "Update available: v\(update.version)"
             updateURL = URL(string: update.htmlURL)
             updateRow.isHidden = false
@@ -148,8 +167,8 @@ final class MenuBarPopoverViewController: NSViewController {
             updateRow.isHidden = true
         }
 
-        // Login / Logout button title
-        updateAuthRow()
+        // Login / Logout button title (menu variant uses a menu item)
+        if showsActionRows { updateAuthRow() }
 
         // NSPopover pins the root view to the host frame, so `view.fittingSize`
         // can stay inflated after a row collapses. Measure the internal stack
@@ -165,7 +184,9 @@ final class MenuBarPopoverViewController: NSViewController {
     }
 
     private func publishCurrentSize() {
-        let size = NSSize(width: 260, height: ceil(rootStack.fittingSize.height + 12))
+        let size = NSSize(
+            width: Self.popoverWidth,
+            height: ceil(rootStack.fittingSize.height + Self.paddingY * 2))
         preferredContentSize = size
         onContentSizeChange?(size)
     }
@@ -175,7 +196,7 @@ final class MenuBarPopoverViewController: NSViewController {
     private func configureRootStack() {
         rootStack.orientation = .vertical
         rootStack.alignment   = .leading
-        rootStack.spacing     = 2
+        rootStack.spacing     = 12
         rootStack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rootStack)
     }
@@ -191,6 +212,27 @@ final class MenuBarPopoverViewController: NSViewController {
         rootStack.addArrangedSubview(dataStack)
         rootStack.addArrangedSubview(statusStack)
 
+        // Expand all rows to the stack width. Separators are excluded: they are
+        // deliberately wider than the stack (below), and pinning them here would
+        // fight that and blow out the whole column's width.
+        // Runs before the menu-variant early return so both surfaces get it.
+        for row in rootStack.arrangedSubviews where !(row is NSBox) {
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.widthAnchor.constraint(equalTo: rootStack.widthAnchor).isActive = true
+        }
+        // Separators bleed a full 16pt past the content padding on each side, so
+        // the rule spans the surface like the system popovers' rules do.
+        for divider in rootStack.arrangedSubviews where divider is NSBox {
+            divider.centerXAnchor.constraint(equalTo: rootStack.centerXAnchor).isActive = true
+            divider.widthAnchor.constraint(
+                equalTo: rootStack.widthAnchor, constant: Self.paddingX * 2).isActive = true
+        }
+
+        if !showsActionRows {
+            applyMenuHeaderAdjustments()
+            return
+        }
+
         rootStack.addArrangedSubview(makeDivider())
 
         // --- Action rows ---
@@ -200,7 +242,9 @@ final class MenuBarPopoverViewController: NSViewController {
             }
         })
 
-        rootStack.addArrangedSubview(makeMenuRow("Settings...", symbolName: "gear") { [weak self] in
+        // No symbol, and no ellipsis: the sibling rows are label-only, and
+        // AppKit decorates a "Settings…" title with a gear glyph on its own.
+        rootStack.addArrangedSubview(makeMenuRow("Settings", symbolName: nil) { [weak self] in
             self?.onSettings()
         })
 
@@ -212,15 +256,40 @@ final class MenuBarPopoverViewController: NSViewController {
 
         rootStack.addArrangedSubview(makeDivider())
 
-        rootStack.addArrangedSubview(makeMenuRow("Quit", symbolName: nil) {
-            NSApplication.shared.terminate(nil)
-        })
+        // Refresh-interval shortcut rides the footer row: the usage section it
+        // used to live in has no spare width for the popup.
+        styleIntervalPopUp(intervalButton)
+        let footerRow = NSStackView(views: [
+            makeMenuRow("Quit", symbolName: nil) {
+                NSApplication.shared.terminate(nil)
+            },
+            makeFlexibleSpacer(),
+            intervalButton,
+        ])
+        footerRow.orientation = .horizontal
+        footerRow.spacing = 8
+        footerRow.translatesAutoresizingMaskIntoConstraints = false
+        rootStack.addArrangedSubview(footerRow)
 
-        // Expand all rows to fill the full width
-        for view in rootStack.arrangedSubviews {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            view.widthAnchor.constraint(equalTo: rootStack.widthAnchor).isActive = true
-        }
+
+    }
+
+    /// Menu-hosted variant: in-view controls are unreliable inside an NSMenu,
+    /// and the action rows become real menu items, so neither is built here.
+    private func applyMenuHeaderAdjustments() {
+        refreshButton.isHidden = true
+        intervalButton.isHidden = true
+        updateRow.isHidden = true
+        authContainer.isHidden = true
+
+
+        // Inside an NSMenu the item view is laid out by frame, not by
+        // AutoLayout: the fixed width constraint would fight the frame the menu
+        // assigns and squeeze the content down to the widest menu title
+        // (~195pt), truncating the large figure to "97".
+        containerWidthConstraint.isActive = false
+        view.translatesAutoresizingMaskIntoConstraints = true
+        weeklyCard.isHidden = true
     }
 
     // MARK: - Data stack
@@ -228,7 +297,7 @@ final class MenuBarPopoverViewController: NSViewController {
     private func buildDataStack() {
         dataStack.orientation = .vertical
         dataStack.alignment   = .leading
-        dataStack.spacing     = 2
+        dataStack.spacing     = 12
         dataStack.translatesAutoresizingMaskIntoConstraints = false
 
         // --- User info row ---
@@ -237,83 +306,104 @@ final class MenuBarPopoverViewController: NSViewController {
         userInfoRow.spacing = 5
         userInfoRow.translatesAutoresizingMaskIntoConstraints = false
 
-        nameLabel.font      = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        nameLabel.font      = NSFont.systemFont(ofSize: 15, weight: .semibold)
         nameLabel.textColor = NSColor.labelColor
         nameLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
         styleBadge(badgeLabel)
 
-        emailLabel.font      = NSFont.systemFont(ofSize: 10, weight: .regular)
+        emailLabel.font      = NSFont.systemFont(ofSize: 12, weight: .regular)
         emailLabel.textColor = NSColor.secondaryLabelColor
+        emailLabel.lineBreakMode = .byTruncatingTail
         emailLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         emailLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        // Name + plan badge on the first line, address on its own line beneath:
+        // at system-popover font sizes the three would need ~290pt and, because
+        // every row is pinned to the stack width, that single row would push the
+        // whole popover past its frame.
         let spacer1 = makeFlexibleSpacer()
         userInfoRow.addArrangedSubview(nameLabel)
         userInfoRow.addArrangedSubview(badgeLabel)
         userInfoRow.addArrangedSubview(spacer1)
-        userInfoRow.addArrangedSubview(emailLabel)
 
         dataStack.addArrangedSubview(userInfoRow)
+        dataStack.addArrangedSubview(emailLabel)
+        dataStack.setCustomSpacing(2, after: userInfoRow)
         dataStack.addArrangedSubview(makeDivider())
 
-        // --- Usage label + value + refresh ---
+        // --- Usage header: title + primary figure + refresh ---
         let usageRow = NSStackView()
         usageRow.orientation = .horizontal
-        usageRow.spacing = 4
+        usageRow.spacing     = 8
         usageRow.translatesAutoresizingMaskIntoConstraints = false
 
-        usageTitleLabel.font      = NSFont.systemFont(ofSize: 12, weight: .regular)
-        usageTitleLabel.textColor = NSColor.secondaryLabelColor
+        usageTitleLabel.font      = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        usageTitleLabel.textColor = NSColor.labelColor
         usageTitleLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
-        usageValueLabel.font      = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        usageValueLabel.textColor = NSColor.secondaryLabelColor
-        usageValueLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        // Large and light, like the temperature figure in Weather. 28pt keeps
+        // a two-decimal currency figure clear of the refresh button.
+        bigValueLabel.font      = NSFont.monospacedDigitSystemFont(ofSize: 28, weight: .regular)
+        bigValueLabel.textColor = NSColor.labelColor
+        bigValueLabel.alignment = .right
+        bigValueLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        styleIconButton(refreshButton, symbolName: "arrow.clockwise", size: 10)
+        styleIconButton(refreshButton, symbolName: "arrow.clockwise", size: 11)
         refreshButton.target = self
         refreshButton.action = #selector(refreshTapped)
 
         let spacer2 = makeFlexibleSpacer()
         usageRow.addArrangedSubview(usageTitleLabel)
         usageRow.addArrangedSubview(spacer2)
-        usageRow.addArrangedSubview(usageValueLabel)
+        usageRow.addArrangedSubview(bigValueLabel)
         usageRow.addArrangedSubview(refreshButton)
 
         dataStack.addArrangedSubview(usageRow)
 
-        // --- Progress bar + percent ---
-        let progressRow = NSStackView()
-        progressRow.orientation = .horizontal
-        progressRow.spacing = 6
-        progressRow.translatesAutoresizingMaskIntoConstraints = false
-
+        // --- Progress bar (full width) ---
         progressBar.translatesAutoresizingMaskIntoConstraints = false
-        progressBar.heightAnchor.constraint(equalToConstant: 6).isActive = true
+        progressBar.heightAnchor.constraint(equalToConstant: 7).isActive = true
         progressBar.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        dataStack.addArrangedSubview(progressBar)
 
-        percentLabel.font      = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
-        percentLabel.textColor = NSColor.secondaryLabelColor
-        percentLabel.alignment = .right
-        percentLabel.translatesAutoresizingMaskIntoConstraints = false
-        percentLabel.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        // --- Foot: used / limit pair, reset countdown, refresh interval ---
+        let bottomRow = NSStackView()
+        bottomRow.orientation = .horizontal
+        bottomRow.spacing     = 8
+        bottomRow.translatesAutoresizingMaskIntoConstraints = false
 
-        progressRow.addArrangedSubview(progressBar)
-        progressRow.addArrangedSubview(percentLabel)
+        usageValueLabel.font      = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        usageValueLabel.textColor = NSColor.secondaryLabelColor
+        usageValueLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
-        dataStack.addArrangedSubview(progressRow)
+        resetLabel.font      = NSFont.systemFont(ofSize: 12, weight: .regular)
+        resetLabel.textColor = NSColor.tertiaryLabelColor
+        // Must yield rather than push: this row and the header row together set
+        // the popover's minimum content width, and overflowing it clips the
+        // whole right edge (observed 2026-09-22).
+        resetLabel.lineBreakMode = .byTruncatingTail
+        resetLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        usageValueLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let spacer4 = makeFlexibleSpacer()
+        bottomRow.addArrangedSubview(usageValueLabel)
+        bottomRow.addArrangedSubview(spacer4)
+        bottomRow.addArrangedSubview(resetLabel)
+
+        dataStack.addArrangedSubview(bottomRow)
 
         // --- Secondary metric row ---
         secondaryRow.orientation = .horizontal
         secondaryRow.spacing = 4
         secondaryRow.translatesAutoresizingMaskIntoConstraints = false
 
-        secondaryKey.font      = NSFont.systemFont(ofSize: 12, weight: .regular)
+        secondaryKey.font      = NSFont.systemFont(ofSize: 14, weight: .regular)
         secondaryKey.textColor = NSColor.secondaryLabelColor
 
-        secondaryValue.font      = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        secondaryValue.font      = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         secondaryValue.textColor = NSColor.secondaryLabelColor
+        secondaryValue.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let spacer3 = makeFlexibleSpacer()
         secondaryRow.addArrangedSubview(secondaryKey)
@@ -340,14 +430,24 @@ final class MenuBarPopoverViewController: NSViewController {
             weeklyChartHeightConstraint,
         ])
         weeklyChartContainer.clipsToBounds = true
-        dataStack.addArrangedSubview(weeklyChartContainer)
+
+        weeklyCard.layer?.backgroundColor = nil
+        weeklyCard.translatesAutoresizingMaskIntoConstraints = false
+        weeklyCard.addSubview(weeklyChartContainer)
+        NSLayoutConstraint.activate([
+            weeklyChartContainer.topAnchor.constraint(equalTo: weeklyCard.topAnchor, constant: 8),
+            weeklyChartContainer.bottomAnchor.constraint(equalTo: weeklyCard.bottomAnchor, constant: -8),
+            weeklyChartContainer.leadingAnchor.constraint(equalTo: weeklyCard.leadingAnchor, constant: 10),
+            weeklyChartContainer.trailingAnchor.constraint(equalTo: weeklyCard.trailingAnchor, constant: -10),
+        ])
+        dataStack.addArrangedSubview(weeklyCard)
 
         // Default to collapsed; applyData decides visibility per refresh.
         weeklyChartHeightConstraint.constant = 0
         weeklyChartTopConstraint.constant = 0
         weeklyChartView.isHidden = true
 
-        weeklyStatusLabel.font = NSFont.systemFont(ofSize: 11)
+        weeklyStatusLabel.font = NSFont.systemFont(ofSize: 12)
         weeklyStatusLabel.textColor = CircularProgressIcon.warnColor
         weeklyStatusLabel.isHidden = true
         weeklyStatusLabel.lineBreakMode = .byTruncatingTail
@@ -358,26 +458,8 @@ final class MenuBarPopoverViewController: NSViewController {
         )
         dataStack.addArrangedSubview(weeklyStatusLabel)
 
-        // --- Reset date + interval ---
-        let bottomRow = NSStackView()
-        bottomRow.orientation = .horizontal
-        bottomRow.spacing = 4
-        bottomRow.translatesAutoresizingMaskIntoConstraints = false
-
-        resetLabel.font      = NSFont.systemFont(ofSize: 10, weight: .regular)
-        resetLabel.textColor = NSColor.tertiaryLabelColor
-
-        styleIntervalPopUp(intervalButton)
-
-        let spacer4 = makeFlexibleSpacer()
-        bottomRow.addArrangedSubview(resetLabel)
-        bottomRow.addArrangedSubview(spacer4)
-        bottomRow.addArrangedSubview(intervalButton)
-
-        dataStack.addArrangedSubview(bottomRow)
-
         // --- Stale-data indicator (hidden by default) ---
-        staleLabel.font      = NSFont.systemFont(ofSize: 11)
+        staleLabel.font      = NSFont.systemFont(ofSize: 12)
         staleLabel.textColor = CircularProgressIcon.warnColor
         staleLabel.isHidden  = true
         // #87: the message can exceed the 240pt inner width. Its width demand
@@ -481,7 +563,7 @@ final class MenuBarPopoverViewController: NSViewController {
         updateButton.bezelStyle      = .inline
         updateButton.isBordered      = false
         updateButton.alignment       = .left
-        updateButton.font            = NSFont.systemFont(ofSize: 13)
+        updateButton.font            = NSFont.systemFont(ofSize: 14)
         updateButton.contentTintColor = NSColor.systemBlue
         if let img = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil) {
             updateButton.image          = img
@@ -491,7 +573,7 @@ final class MenuBarPopoverViewController: NSViewController {
         updateButton.target = self
         updateButton.action = #selector(openUpdateURL)
         updateButton.translatesAutoresizingMaskIntoConstraints = false
-        updateButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        updateButton.heightAnchor.constraint(equalToConstant: 32).isActive = true
 
         updateRow.addArrangedSubview(updateButton)
     }
@@ -510,16 +592,20 @@ final class MenuBarPopoverViewController: NSViewController {
             badgeLabel.isHidden = true
         }
 
-        // Usage
+        // Usage — the unit setting chooses the large figure; the value line
+        // beneath carries the other reading of the same number.
         usageTitleLabel.stringValue = data.usageLabel
+        bigValueLabel.stringValue   = viewModel.planUsageUnit == .percent
+            ? data.percentText
+            : data.primaryUsageValue
         usageValueLabel.stringValue = data.usageText
+        usageValueLabel.isHidden    = viewModel.planUsageUnit == .percent
         refreshButton.isEnabled     = !viewModel.isLoading
-        refreshButton.isHidden      = (viewModel.authState != .loggedIn)
+        refreshButton.isHidden      = !showsActionRows || (viewModel.authState != .loggedIn)
 
         // Progress
         progressBar.progress = min(data.percentUsed / 100.0, 1.0)
         progressBar.barColor = CircularProgressIcon.tokenColor(for: data.percentUsed)
-        percentLabel.stringValue = data.percentText
 
         // Secondary metric row (label + value vary by mode — see UsageDisplayData)
         if let label = data.secondaryUsageLabel, let value = data.secondaryUsageValue {
@@ -543,7 +629,8 @@ final class MenuBarPopoverViewController: NSViewController {
             weeklyChartView.update(
                 days: weekly,
                 style: viewModel.weeklyChartStyle,
-                metric: viewModel.weeklyChartMetric
+                metric: viewModel.effectiveWeeklyChartMetric,
+                scale: viewModel.weeklyChartScale
             )
             setWeeklyChartVisible(true)
         } else {
@@ -588,6 +675,7 @@ final class MenuBarPopoverViewController: NSViewController {
         heightConstraint.constant = visible ? 76 : 0
         topConstraint.constant = visible ? 4 : 0
         weeklyChartView.isHidden = !visible
+        weeklyCard.isHidden = !visible
         weeklyChartContainer.invalidateIntrinsicContentSize()
         dataStack.needsLayout = true
         rootStack.needsLayout = true
@@ -753,7 +841,7 @@ final class MenuBarPopoverViewController: NSViewController {
 
     // MARK: - Factory helpers
 
-    private func makeDivider() -> NSBox {
+    private func makeDivider() -> NSView {
         let box = NSBox()
         box.boxType = .separator
         box.translatesAutoresizingMaskIntoConstraints = false
@@ -793,7 +881,7 @@ final class MenuBarPopoverViewController: NSViewController {
     ) -> MenuRowButton {
         let btn = MenuRowButton(action: action)
         btn.title       = title
-        btn.font        = NSFont.systemFont(ofSize: 13)
+        btn.font        = NSFont.systemFont(ofSize: 14)
         btn.alignment   = .left
         btn.isBordered  = false
         btn.bezelStyle  = .inline
@@ -806,7 +894,7 @@ final class MenuBarPopoverViewController: NSViewController {
         }
 
         btn.translatesAutoresizingMaskIntoConstraints = false
-        btn.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        btn.heightAnchor.constraint(equalToConstant: 32).isActive = true
         return btn
     }
 
@@ -823,16 +911,16 @@ final class MenuBarPopoverViewController: NSViewController {
         button.translatesAutoresizingMaskIntoConstraints = false
     }
 
+    /// No fill: on the vibrant popover background a filled chip reads as a
+    /// dirty block. System popovers label this kind of metadata with plain
+    /// secondary text instead.
     private func styleBadge(_ label: NSTextField) {
-        label.font            = NSFont.systemFont(ofSize: 9, weight: .medium)
+        label.font            = NSFont.systemFont(ofSize: 10, weight: .medium)
         label.textColor       = NSColor.secondaryLabelColor
-        label.backgroundColor = NSColor.quaternaryLabelColor
-        label.drawsBackground = true
+        label.drawsBackground = false
         label.isBezeled       = false
         label.isEditable      = false
         label.isSelectable    = false
-        label.wantsLayer      = true
-        label.layer?.cornerRadius = 3
         label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
     }
 
@@ -850,6 +938,23 @@ final class MenuBarPopoverViewController: NSViewController {
     @objc private func openUpdateURL() {
         guard let url = updateURL else { return }
         ExternalURL.openGitHub(url)
+    }
+}
+
+// MARK: - CardView
+
+/// Rounded card chrome that re-resolves its dynamic color on appearance change
+/// (`updateLayer` is AppKit's hook for that; assigning the color at init would
+/// bake in whichever appearance was active when the popover was first built).
+private final class CardView: NSView {
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.cornerRadius = 8
+        // No fill: system popovers separate the chart with whitespace and a
+        // rule, not with a tinted block.
+        layer?.backgroundColor = nil
     }
 }
 

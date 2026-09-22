@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CursorMeter — menu bar icon + popover mockup</title>
+<style>
+  :root {
+    --menubar-bg: #1e1e1e;
+    --menu-fg: #ffffff;
+    --popover-bg: rgba(250,250,250,0.82);
+    --popover-bg-dark: rgba(40,40,40,0.72);
+    --card: rgba(120,120,128,0.12);
+    --sep: rgba(60,60,67,0.18);
+    --label: #1d1d1f;
+    --label-2: rgba(60,60,67,0.62);
+    --accent: #34b34d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 40px 56px;
+    font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+    background: #ececec; color: var(--label);
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--sep); }
+  p.note { color: var(--label-2); font-size: 12px; margin: 6px 0 16px; max-width: 760px; line-height: 1.5; }
+
+  /* ---------- menu bar strip ---------- */
+  .menubar {
+    display: flex; align-items: center; gap: 18px;
+    height: 28px; padding: 0 14px;
+    background: var(--menubar-bg); border-radius: 7px;
+  }
+  .menubar .right { margin-left: auto; display: flex; align-items: center; gap: 14px; color: var(--menu-fg); font-size: 12px; opacity: .85; }
+
+  .variant { display: inline-flex; flex-direction: column; align-items: center; gap: 6px; }
+  .variant .cap { font-size: 10px; color: var(--label-2); }
+  .iconrow { display: flex; align-items: center; gap: 26px; }
+
+  /* ---------- popover ---------- */
+  .popovers { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .popover {
+    background: var(--popover-bg);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-radius: 12px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.22), 0 0 0 .5px rgba(0,0,0,.12);
+    overflow: hidden;
+  }
+  .popover.plain { background: #f6f6f6; backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: 0 6px 20px rgba(0,0,0,.18), 0 0 0 .5px rgba(0,0,0,.16); }
+
+  /* CURRENT (shipped) — tight */
+  .cur { width: 260px; padding: 6px 10px; font-size: 11px; line-height: 1.25; }
+  .cur .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .cur .sep { height: 1px; background: var(--sep); margin: 4px 0; }
+  .cur .bar { height: 3px; border-radius: 1.5px; background: var(--card); overflow: hidden; margin: 3px 0; }
+  .cur .bar > i { display: block; height: 100%; width: 96%; background: #e52727; }
+  .cur .muted { color: var(--label-2); font-size: 10px; }
+  .cur .big { font-size: 12px; font-weight: 600; }
+  .cur .item { padding: 2px 0; }
+  .cur .chart { height: 46px; background: var(--card); border-radius: 4px; margin: 3px 0; }
+
+  /* PROPOSED — macOS Weather/Battery rhythm */
+  .new { width: 300px; padding: 14px 16px; font-size: 13px; line-height: 1.35; }
+  .new .group + .group { margin-top: 14px; }
+  .new .sep { height: 1px; background: var(--sep); margin: 12px -16px; }
+  .new .hdr { font-size: 13px; font-weight: 600; }
+  .new .sub { font-size: 11px; color: var(--label-2); margin-top: 1px; }
+  .new .metric { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .new .metric .k { font-size: 13px; color: var(--label); }
+  .new .metric .v { font-size: 13px; font-variant-numeric: tabular-nums; }
+  .new .pct { font-size: 26px; font-weight: 600; letter-spacing: -.4px; font-variant-numeric: tabular-nums; }
+  .new .pctsmall { font-size: 12px; color: var(--label-2); font-variant-numeric: tabular-nums; }
+  .new .bar { height: 5px; border-radius: 2.5px; background: var(--card); overflow: hidden; margin: 8px 0 6px; }
+  .new .bar > i { display: block; height: 100%; width: 96%; background: #e52727; }
+  .new .card { background: var(--card); border-radius: 8px; padding: 10px 12px; }
+  .new .chart { height: 64px; display: flex; align-items: flex-end; gap: 6px; }
+  .new .chart i { flex: 1; background: var(--accent); border-radius: 3px; opacity: .85; }
+  .new .item { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; font-size: 13px; }
+  .new .item:hover { background: rgba(120,120,128,.16); }
+  .new .item .sp { width: 16px; text-align: center; color: var(--label-2); }
+  .new .foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--label-2); }
+
+  .tag { display: inline-block; font-size: 11px; color: var(--label-2); margin-bottom: 8px; }
+  .tag b { color: var(--label); }
+
+  /* $ / % toggle preview */
+  .toggleDemo { display: flex; gap: 10px; }
+  .seg { display: inline-flex; background: var(--card); border-radius: 7px; padding: 2px; }
+  .seg span { padding: 3px 12px; font-size: 12px; border-radius: 5px; color: var(--label-2); }
+  .seg span.on { background: #fff; color: var(--label); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+</style>
+</head>
+<body>
+
+<h1>CursorMeter — menu bar icon &amp; popover</h1>
+<p class="note">
+  Candidate icons are drawn as vector SVG (same geometry the AppKit code will use): a monochrome
+  <b>isometric cube</b> — Cursor's logo silhouette — filled with <code>labelColor</code>, so it renders
+  white on a dark menu bar and black on a light one. All three drop the green/yellow/red ring fill.
+</p>
+
+<h2>1. Menu bar icon candidates</h2>
+
+<div class="iconrow">
+  <!-- A: logo + underline progress -->
+  <div class="variant">
+    <div class="menubar" style="width:150px">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="#fff">
+        <g transform="translate(10,9)">
+          <polygon points="0,-5.2 5.2,-2.2 0,0.8 -5.2,-2.2" opacity="1"/>
+          <polygon points="-5.2,-2.2 0,0.8 0,6.4 -5.2,3.4" opacity="0.62"/>
+          <polygon points="0,0.8 5.2,-2.2 5.2,3.4 0,6.4" opacity="0.44"/>
+        </g>
+        <rect x="2" y="16.4" width="16" height="2" rx="1" fill="#fff" opacity="0.3"/>
+        <rect x="2" y="16.4" width="15.4" height="2" rx="1" fill="#fff"/>
+      </svg>
+    </div>
+    <div class="cap">A — cube + underline bar</div>
+  </div>
+
+  <!-- B: ring around cube -->
+  <div class="variant">
+    <div class="menubar" style="width:150px">
+      <svg width="20" height="20" viewBox="0 0 20 20">
+        <circle cx="10" cy="10" r="8.2" fill="none" stroke="#fff" stroke-opacity="0.28" stroke-width="1.6"/>
+        <circle cx="10" cy="10" r="8.2" fill="none" stroke="#fff" stroke-width="1.8"
+                stroke-dasharray="51.5 51.5" stroke-linecap="round" transform="rotate(-90 10 10)"/>
+        <g transform="translate(10,10) scale(0.62)" fill="#fff">
+          <polygon points="0,-5.2 5.2,-2.2 0,0.8 -5.2,-2.2" opacity="1"/>
+          <polygon points="-5.2,-2.2 0,0.8 0,6.4 -5.2,3.4" opacity="0.62"/>
+          <polygon points="0,0.8 5.2,-2.2 5.2,3.4 0,6.4" opacity="0.44"/>
+        </g>
+      </svg>
+    </div>
+    <div class="cap">B — ring + cube inside</div>
+  </div>
+
+  <!-- C: cube + text -->
+  <div class="variant">
+    <div class="menubar" style="width:170px">
+      <svg width="52" height="20" viewBox="0 0 52 20">
+        <g transform="translate(9,10)" fill="#fff">
+          <polygon points="0,-5.2 5.2,-2.2 0,0.8 -5.2,-2.2" opacity="1"/>
+          <polygon points="-5.2,-2.2 0,0.8 0,6.4 -5.2,3.4" opacity="0.62"/>
+          <polygon points="0,0.8 5.2,-2.2 5.2,3.4 0,6.4" opacity="0.44"/>
+        </g>
+        <text x="19" y="14.5" fill="#fff" font-family="-apple-system" font-size="13"
+              font-weight="500" font-variant-numeric="tabular-nums">96%</text>
+      </svg>
+    </div>
+    <div class="cap">C — cube + percent text</div>
+  </div>
+
+  <!-- D: cube + ring badge -->
+  <div class="variant">
+    <div class="menubar" style="width:150px">
+      <svg width="20" height="20" viewBox="0 0 20 20">
+        <g transform="translate(10,10.4)" fill="#fff">
+          <polygon points="0,-5.6 5.6,-2.4 0,0.8 -5.6,-2.4" opacity="1"/>
+          <polygon points="-5.6,-2.4 0,0.8 0,7.2 -5.6,4" opacity="0.62"/>
+          <polygon points="0,0.8 5.6,-2.4 5.6,4 0,7.2" opacity="0.44"/>
+        </g>
+        <circle cx="16.4" cy="4.2" r="3.4" fill="#fff"/>
+        <circle cx="16.4" cy="4.2" r="2.2" fill="#1e1e1e"/>
+        <circle cx="16.4" cy="4.2" r="2.2" fill="none" stroke="#fff" stroke-width="1.4"
+                stroke-dasharray="13.8 13.8" stroke-linecap="round" transform="rotate(-90 16.4 4.2)"/>
+      </svg>
+    </div>
+    <div class="cap">D — cube + corner ring badge</div>
+  </div>
+</div>
+
+<h2>2. Popover — current vs proposed</h2>
+
+<div class="popovers">
+  <div>
+    <div class="tag"><b>Current</b> — 260px, 6/10 padding, 2pt spacing</div>
+    <div class="popover plain cur">
+      <div class="row"><span class="big">Alice</span><span class="muted">enterprise</span></div>
+      <div class="muted">alice@corp.com</div>
+      <div class="sep"></div>
+      <div class="row"><span>Plan Usage</span><span class="big">$1157.86 / $1203.05</span></div>
+      <div class="bar"><i></i></div>
+      <div class="row"><span class="muted">96%</span><span class="muted">Resets in 8 days</span></div>
+      <div class="row"><span class="muted">On-demand</span><span class="muted">$0.00 / $130.00</span></div>
+      <div class="chart"></div>
+      <div class="sep"></div>
+      <div class="item">Open Dashboard</div>
+      <div class="item">Settings…</div>
+      <div class="sep"></div>
+      <div class="item">Quit</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="tag"><b>Proposed</b> — 300px, 14/16 padding, macOS Weather rhythm</div>
+    <div class="popover new">
+      <div class="group">
+        <div class="metric"><span class="hdr">Plan Usage</span><span class="pct">96%</span></div>
+        <div class="bar"><i></i></div>
+        <div class="foot"><span>$1157.86 of $1203.05</span><span>Resets in 8 days</span></div>
+      </div>
+
+      <div class="sep"></div>
+
+      <div class="group">
+        <div class="metric"><span class="k">On-demand</span><span class="v">$0.00 / $130.00</span></div>
+      </div>
+
+      <div class="group">
+        <div class="card">
+          <div class="sub" style="margin-bottom:6px">Last 7 days</div>
+          <div class="chart">
+            <i style="height:26%"></i><i style="height:62%"></i><i style="height:44%"></i>
+            <i style="height:88%"></i><i style="height:70%"></i><i style="height:34%"></i>
+            <i style="height:52%"></i>
+          </div>
+        </div>
+      </div>
+
+      <div class="sep"></div>
+
+      <div class="group">
+        <div class="metric"><span class="k">Account</span><span class="v">alice@corp.com</span></div>
+      </div>
+
+      <div class="sep"></div>
+
+      <div class="group">
+        <div class="item"><span class="sp">↗</span>Open Dashboard</div>
+        <div class="item"><span class="sp">⚙</span>Settings…</div>
+        <div class="item"><span class="sp">⏻</span>Quit</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>3. Plan Usage unit toggle</h2>
+<div class="toggleDemo">
+  <div>
+    <div class="tag">Settings → Display → <b>Plan usage shows</b></div>
+    <div class="seg"><span class="on">Amount</span><span>Percent</span></div>
+  </div>
+  <div>
+    <div class="tag">Popover main row</div>
+    <div style="margin-top:6px; font-size:13px">
+      Amount → <b>$1157.86 / $1203.05</b><br>
+      Percent → <b>96%</b>
+    </div>
+  </div>
+</div>
+<p class="note">
+  Percent mode hides the used/limit pair entirely (same treatment as the existing percent-only
+  plan path), so the row can never print a meaningless <code>0 / 0</code>.
+</p>
+
+</body>
+</html>

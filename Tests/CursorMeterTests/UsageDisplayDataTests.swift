@@ -29,24 +29,23 @@ final class UsageDisplayDataTests: XCTestCase {
 
     func testPercentText() {
         let data = makeData(used: 1, limit: 3)
-        // 33.333...% rounds to 33
-        XCTAssertEqual(data.percentText, "33%")
+        // 33.333...% → one decimal, rounded not truncated.
+        XCTAssertEqual(data.percentText, "33.3%")
     }
 
     func testPercentTextZero() {
         let data = makeData(used: 0, limit: 100)
-        XCTAssertEqual(data.percentText, "0%")
+        XCTAssertEqual(data.percentText, "0.0%")
     }
 
-    func testPercentTextRoundsHalfUpLikeDashboard() {
-        // #106: dashboard says "3%" for totalPercentUsed 2.5 — round, don't truncate.
+    func testPercentTextKeepsOneDecimal() {
         let data = makeData(used: 1, limit: 40) // 2.5%
-        XCTAssertEqual(data.percentText, "3%")
+        XCTAssertEqual(data.percentText, "2.5%")
     }
 
-    func testPercentTextRoundsDown() {
+    func testPercentTextRoundsToOneDecimal() {
         let data = makeData(used: 12, limit: 500) // 2.4%
-        XCTAssertEqual(data.percentText, "2%")
+        XCTAssertEqual(data.percentText, "2.4%")
     }
 
     // MARK: - resolvedMenuBarDisplayMode (#105)
@@ -61,6 +60,60 @@ final class UsageDisplayDataTests: XCTestCase {
 
     func testResolvedModePercentPassesThrough() {
         XCTAssertEqual(UsageViewModel.resolvedMenuBarDisplayMode(isPercentOnly: true, setting: 2), 2)
+    }
+
+    // MARK: - effectiveMenuBarDisplayMode (icon style text requirement)
+
+    func testEffectiveModeCursorTextCoercesNoneToPercent() {
+        XCTAssertEqual(
+            UsageViewModel.effectiveMenuBarDisplayMode(
+                isPercentOnly: false, setting: 0, iconStyle: .cursorText),
+            2,
+            "cursorText carries no progress glyph — None would leave the slot unreadable"
+        )
+    }
+
+    func testEffectiveModeCursorTextRespectsRatio() {
+        XCTAssertEqual(
+            UsageViewModel.effectiveMenuBarDisplayMode(
+                isPercentOnly: false, setting: 1, iconStyle: .cursorText),
+            1
+        )
+    }
+
+    func testEffectiveModeOtherStylesPassThrough() {
+        for style in [MenuBarIconStyle.pie, .cursor, .ring, .badge] {
+            XCTAssertEqual(
+                UsageViewModel.effectiveMenuBarDisplayMode(
+                    isPercentOnly: false, setting: 0, iconStyle: style),
+                0
+            )
+        }
+    }
+
+    // MARK: - primaryUsageValue (popover large figure)
+
+    func testPrimaryUsageValueCreditPlan() {
+        let data = makeCreditData(usedCents: 115786, limitCents: 120305)
+        XCTAssertEqual(data.primaryUsageValue, "$1157.86")
+    }
+
+    func testPrimaryUsageValueRequestPlan() {
+        let data = makeData(used: 757, limit: 500)
+        XCTAssertEqual(data.primaryUsageValue, "757")
+    }
+
+    func testPrimaryUsageValuePercentOnlyPlan() {
+        let data = UsageDisplayData(
+            email: "test@test.com", name: "Test", membershipType: "free",
+            planUsedCents: nil, planLimitCents: nil, serverPercentUsed: 5.5,
+            requestsUsed: 0, requestsLimit: 0,
+            onDemandUsedCents: nil, onDemandLimitCents: nil,
+            onDemandEnabled: nil,
+            isOnDemandActive: false,
+            cycleStartDate: nil, resetDate: nil
+        )
+        XCTAssertEqual(data.primaryUsageValue, "5.5%")
     }
 
     func testResolvedModeUntouchedWhenNotPercentOnly() {
@@ -351,7 +404,7 @@ final class UsageDisplayDataTests: XCTestCase {
 
     func testCreditPercentText() {
         let data = makeCreditData(usedCents: 800, limitCents: 2000)
-        XCTAssertEqual(data.percentText, "40%")
+        XCTAssertEqual(data.percentText, "40.0%")
     }
 
     // MARK: - from(summary:usage:) credit detection
@@ -507,7 +560,7 @@ final class UsageDisplayDataTests: XCTestCase {
         let data = UsageDisplayData.from(summary: summary, usage: usage, userInfo: userInfo)
 
         XCTAssertEqual(data.percentUsed, 5.5, accuracy: 0.01)
-        XCTAssertEqual(data.percentText, "6%")
+        XCTAssertEqual(data.percentText, "5.5%")
         XCTAssertEqual(data.membershipType, "free")
     }
 
@@ -523,7 +576,7 @@ final class UsageDisplayDataTests: XCTestCase {
 
         let data = UsageDisplayData.from(summary: summary, usage: nil, userInfo: userInfo)
 
-        XCTAssertEqual(data.usageText, "6%", "Free plan should show percent instead of 0 / 0")
+        XCTAssertEqual(data.usageText, "5.5%", "Free plan should show percent instead of 0 / 0")
     }
 
     func testFreePlanMenuBarText() {
@@ -538,7 +591,7 @@ final class UsageDisplayDataTests: XCTestCase {
 
         let data = UsageDisplayData.from(summary: summary, usage: nil, userInfo: userInfo)
 
-        XCTAssertEqual(data.menuBarUsedText, "6%")
+        XCTAssertEqual(data.menuBarUsedText, "5.5%")
         XCTAssertEqual(data.menuBarLimitText, "")
     }
 
@@ -584,9 +637,9 @@ final class UsageDisplayDataTests: XCTestCase {
         let data = UsageDisplayData.from(summary: summary, usage: usage, userInfo: userInfo)
 
         XCTAssertTrue(data.isPercentOnly)
-        XCTAssertEqual(data.usageText, "0%", "Must not render 0 / 0")
+        XCTAssertEqual(data.usageText, "0.0%", "Must not render 0 / 0")
         XCTAssertEqual(data.usageLabel, "Plan Usage")
-        XCTAssertEqual(data.menuBarUsedText, "0%")
+        XCTAssertEqual(data.menuBarUsedText, "0.0%")
         XCTAssertEqual(data.menuBarLimitText, "")
     }
 
@@ -602,7 +655,7 @@ final class UsageDisplayDataTests: XCTestCase {
         let data = UsageDisplayData.from(summary: summary, usage: usage, userInfo: userInfo)
 
         XCTAssertEqual(data.percentUsed, 37.0, accuracy: 0.01)
-        XCTAssertEqual(data.usageText, "37%")
+        XCTAssertEqual(data.usageText, "37.0%")
     }
 
     /// Accepted residual: no hard limit AND no parseable percent → `0 / 0`

@@ -223,8 +223,18 @@ struct UsageDisplayData: Sendable {
     }
 
     var percentText: String {
-        // Round like Cursor's dashboard message ("3%" for 2.5), not truncate (#106).
-        "\(Int(percentUsed.rounded()))%"
+        // One decimal: the plan-percent bands users care about (96.2 vs 96.9)
+        // are invisible after rounding to whole numbers.
+        String(format: "%.1f%%", percentUsed)
+    }
+
+    /// The primary figure on its own, without the "/ limit" partner. Backs the
+    /// popover's large number when the unit setting asks for a single value.
+    var primaryUsageValue: String {
+        if isOnDemandActive { return Self.formatUSD(onDemandUsedCents ?? 0) }
+        if isPercentOnly { return percentText }
+        if isCreditBased { return Self.formatUSD(planUsedCents ?? 0) }
+        return "\(requestsUsed)"
     }
 
     var usageText: String {

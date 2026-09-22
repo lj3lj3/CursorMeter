@@ -2,15 +2,15 @@ import XCTest
 @testable import CursorMeter
 
 /// #87 regression: no dynamic popover row may demand more width from
-/// AutoLayout than the fixed inner width (260pt container − 2×10pt padding).
-/// The stale-data label (#77) had an unbounded intrinsic width (~261.5pt),
-/// which inflated the content view past the popover window frame and clipped
-/// the right edge until app restart.
+/// AutoLayout than the fixed inner width (300pt container − 2×16pt padding).
+/// The stale-data label (#77) had an unbounded intrinsic width, which inflated
+/// the content view past the popover window frame and clipped the right edge
+/// until app restart.
 @MainActor
 final class MenuBarViewLayoutTests: XCTestCase {
 
     /// Inner content width available to rootStack.
-    private static let innerWidth: CGFloat = 240
+    private static let innerWidth: CGFloat = 268
 
     override func tearDown() {
         MockURLProtocol.requestHandler = nil
