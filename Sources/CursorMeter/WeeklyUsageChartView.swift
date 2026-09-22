@@ -8,6 +8,7 @@ final class WeeklyUsageChartView: NSView {
     private var days: [DayUsage] = []
     private var style: WeeklyChartStyle = .outline
     private var metric: WeeklyChartMetric = .amount
+    private var scale: WeeklyChartScale?
     private var hoverIndex: Int?
     private var trackingArea: NSTrackingArea?
 
@@ -18,8 +19,12 @@ final class WeeklyUsageChartView: NSView {
         return f
     }()
 
-    nonisolated static func tooltipText(for day: DayUsage, metric: WeeklyChartMetric) -> String {
-        guard let value = metric.value(for: day) else { return "Amount unavailable" }
+    nonisolated static func tooltipText(
+        for day: DayUsage, metric: WeeklyChartMetric, scale: WeeklyChartScale? = nil
+    ) -> String {
+        guard let value = metric.value(for: day, scale: scale) else {
+            return metric.needsScale ? "Allowance unavailable" : "Amount unavailable"
+        }
         switch metric {
         case .amount:
             return String(format: "$%.2f", value / 100)
@@ -28,6 +33,17 @@ final class WeeklyUsageChartView: NSView {
             let number = String(format: "%.2f", value)
                 .replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
             return "\(number) units"
+        case .percent:
+            return String(format: "%.1f%%", value)
+        }
+    }
+
+    /// Compact label for the peak reference line.
+    nonisolated static func peakLabel(value: Double, metric: WeeklyChartMetric) -> String {
+        switch metric {
+        case .amount:     return String(format: "$%.2f", value / 100)
+        case .usageUnits: return String(format: "%.1f", value)
+        case .percent:    return String(format: "%.1f%%", value)
         }
     }
 
@@ -35,14 +51,24 @@ final class WeeklyUsageChartView: NSView {
         super.init(frame: frame)
         // wantsLayer left as default (false) — avoids the ~90KB backing-store
         // hit on a 280×80 view. Drawing is pure CG into the window backing.
+        // That matters in an NSMenu item view too, where a layer-backed custom
+        // view is not composited reliably.
     }
 
     required init?(coder: NSCoder) { nil }
 
-    func update(days: [DayUsage], style: WeeklyChartStyle, metric: WeeklyChartMetric) {
+    func update(
+        days: [DayUsage],
+        style: WeeklyChartStyle,
+        metric: WeeklyChartMetric,
+        scale: WeeklyChartScale? = nil
+    ) {
         self.days = days
         self.style = style
-        self.metric = days.effectiveMetric(preferred: metric)
+        // The metric arrives already normalized by the view model (it owns the
+        // scale); normalizing here again would need the same denominator.
+        self.metric = metric
+        self.scale = scale
         self.hoverIndex = nil
         needsDisplay = true
     }
@@ -124,17 +150,47 @@ final class WeeklyUsageChartView: NSView {
         guard days.count == 7 else { return }
 
         let chart = chartRect
-        let weeklyMax = days.compactMap { metric.value(for: $0) }.max() ?? 0
+        let weeklyMax = days.compactMap { metric.value(for: $0, scale: scale) }.max() ?? 0
         let yMaxRaw = weeklyMax * 1.05
         let yMax: Double = yMaxRaw > 0 ? yMaxRaw : 1
 
+        drawPeakLine(in: ctx, chart: chart, peak: weeklyMax, yMax: yMax)
         drawBars(in: ctx, chart: chart, weeklyMax: weeklyMax, yMax: yMax)
         drawHoverTooltip(in: ctx, chart: chart, yMax: yMax)
     }
 
+    /// Dashed reference line at the week's peak, labelled with its value — the
+    /// ceiling the bars are read against.
+    private func drawPeakLine(in ctx: CGContext, chart: NSRect, peak: Double, yMax: Double) {
+        guard peak > 0 else { return }
+
+        let y = chart.minY + CGFloat(peak / yMax) * chart.height
+        let lineColor = NSColor.secondaryLabelColor.withAlphaComponent(0.45)
+
+        ctx.saveGState()
+        ctx.setStrokeColor(lineColor.cgColor)
+        ctx.setLineWidth(1)
+        ctx.setLineDash(phase: 0, lengths: [3, 3])
+        ctx.move(to: CGPoint(x: chart.minX, y: y))
+        ctx.addLine(to: CGPoint(x: chart.maxX, y: y))
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        let label = NSAttributedString(
+            string: Self.peakLabel(value: peak, metric: metric),
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 9, weight: .medium),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ])
+        let size = label.size()
+        // Nudge inside the plot area so the 9pt text never clips the top edge.
+        let labelY = min(y + 1, chart.maxY - size.height)
+        label.draw(at: NSPoint(x: chart.minX, y: max(labelY, chart.minY)))
+    }
+
     private func drawBars(in ctx: CGContext, chart: NSRect, weeklyMax: Double, yMax: Double) {
         for (i, day) in days.enumerated() {
-            let value = metric.value(for: day) ?? 0
+            let value = metric.value(for: day, scale: scale) ?? 0
             let normalized = value / yMax
             let h = max(CGFloat(normalized) * chart.height, 0)
 
@@ -189,7 +245,8 @@ final class WeeklyUsageChartView: NSView {
     private func drawHoverTooltip(in ctx: CGContext, chart: NSRect, yMax: Double) {
         guard let idx = hoverIndex else { return }
         let day = days[idx]
-        let text = NSAttributedString(string: Self.tooltipText(for: day, metric: metric), attributes: [
+        let text = NSAttributedString(
+            string: Self.tooltipText(for: day, metric: metric, scale: scale), attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium),
             .foregroundColor: NSColor.white,
         ])
@@ -199,7 +256,7 @@ final class WeeklyUsageChartView: NSView {
         let boxW = textSize.width + padX * 2
         let boxH = textSize.height + padY * 2
 
-        let normalized = (metric.value(for: day) ?? 0) / yMax
+        let normalized = (metric.value(for: day, scale: scale) ?? 0) / yMax
         let barH = max(CGFloat(normalized) * chart.height, 1.5)
         let frame = barFrame(index: idx, height: barH)
 

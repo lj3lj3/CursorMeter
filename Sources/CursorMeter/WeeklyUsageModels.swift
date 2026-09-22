@@ -110,17 +110,78 @@ struct TeamMember: Codable, Sendable {
 enum WeeklyChartMetric: String, CaseIterable, Sendable {
     case amount
     case usageUnits
+    /// Each day as a share of the cycle's total allowance (100% = allowance gone).
+    case percent
 
     init(storedValue: String?) {
         self = storedValue.flatMap(Self.init(rawValue:)) ?? .amount
     }
 
-    /// Amount values use cents; formatting converts them to dollars at the UI boundary.
-    func value(for day: DayUsage) -> Double? {
+    /// Stable index for UI controls (pop-up tags). Persistence goes through
+    /// `rawValue`, so appending a case can never shift a stored preference.
+    var sortIndex: Int {
         switch self {
-        case .amount: day.amountCents
-        case .usageUnits: day.usageUnits
+        case .amount:     return 0
+        case .usageUnits: return 1
+        case .percent:    return 2
         }
+    }
+
+    init?(sortIndex: Int) {
+        switch sortIndex {
+        case 0: self = .amount
+        case 1: self = .usageUnits
+        case 2: self = .percent
+        default: return nil
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .amount:     return "Amount"
+        case .usageUnits: return "Usage units"
+        case .percent:    return "Percent"
+        }
+    }
+
+    /// True when the metric needs a denominator (only `percent` today).
+    var needsScale: Bool {
+        switch self {
+        case .amount, .usageUnits: return false
+        case .percent:             return true
+        }
+    }
+
+    /// Amount values use cents; formatting converts them to dollars at the UI boundary.
+    /// `scale` carries the denominator for the dimensionless metrics; nil makes
+    /// those fall back to nil so the caller can degrade to another metric.
+    func value(for day: DayUsage, scale: WeeklyChartScale? = nil) -> Double? {
+        switch self {
+        case .amount:     return day.amountCents
+        case .usageUnits: return day.usageUnits
+        case .percent:
+            guard let scale, scale.total > 0, let base = scale.basisValue(for: day) else { return nil }
+            return base / scale.total * 100.0
+        }
+    }
+}
+
+/// Denominator for the dimensionless chart metrics.
+///
+/// `basisIsCents` picks which per-day field the denominator is measured
+/// against: credit plans are denominated in cents, request plans in the same
+/// weighted units the plan limit uses — mixing them would scale nonsense.
+struct WeeklyChartScale: Sendable, Equatable {
+    let total: Double
+    let basisIsCents: Bool
+
+    init(total: Double, basisIsCents: Bool) {
+        self.total = total
+        self.basisIsCents = basisIsCents
+    }
+
+    func basisValue(for day: DayUsage) -> Double? {
+        basisIsCents ? day.amountCents : day.usageUnits
     }
 }
 
@@ -168,9 +229,18 @@ extension Array where Element == DayUsage {
         !isEmpty && allSatisfy { $0.amountCents != nil }
     }
 
-    /// Keep the entire chart on one comparable scale when monetary data is incomplete.
-    func effectiveMetric(preferred: WeeklyChartMetric) -> WeeklyChartMetric {
-        preferred == .amount && !isAmountAvailable ? .usageUnits : preferred
+    /// Keep the entire chart on one comparable scale: fall back to usage units
+    /// when the preferred metric has no usable data behind it (no monetary
+    /// values, or no plan allowance to divide by).
+    func effectiveMetric(preferred: WeeklyChartMetric, hasScale: Bool = true) -> WeeklyChartMetric {
+        switch preferred {
+        case .amount:
+            return isAmountAvailable ? .amount : .usageUnits
+        case .percent:
+            return hasScale ? preferred : .usageUnits
+        case .usageUnits:
+            return .usageUnits
+        }
     }
 }
 

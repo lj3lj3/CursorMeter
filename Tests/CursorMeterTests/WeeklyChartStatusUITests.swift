@@ -92,8 +92,9 @@ final class WeeklyChartStatusUITests: XCTestCase {
         let prefix = status == .stale ? "Weekly data:" : "Weekly activity unavailable"
         let labels = visibleLabels(in: vc.view)
         let statusLabel = try XCTUnwrap(labels.first { $0.stringValue.hasPrefix(prefix) })
-        XCTAssertLessThanOrEqual(vc.testHook_contentFittingWidth(), 240)
-        XCTAssertLessThanOrEqual(statusLabel.alignmentRect(forFrame: statusLabel.frame).width, 240)
+        // Inner content width: 300pt popover − 2×16pt padding.
+        XCTAssertLessThanOrEqual(vc.testHook_contentFittingWidth(), 268)
+        XCTAssertLessThanOrEqual(statusLabel.alignmentRect(forFrame: statusLabel.frame).width, 268)
         try capture(vc.view, name: captureName)
 
         vm.weeklyChartEnabled = false

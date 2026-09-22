@@ -286,8 +286,30 @@ final class UsageViewModel {
     var weeklyChartStyle: WeeklyChartStyle = .outline
     var weeklyChartMetric: WeeklyChartMetric = .amount
 
+    /// The chart reads the same unit the popover does. There is no separate
+    /// chart metric setting — a second switch for the same thing only creates
+    /// combinations that contradict each other.
     var effectiveWeeklyChartMetric: WeeklyChartMetric {
-        (weeklyData ?? []).effectiveMetric(preferred: weeklyChartMetric)
+        switch planUsageUnit {
+        case .percent:
+            return weeklyChartScale != nil ? .percent : .usageUnits
+        case .amount:
+            return (weeklyData ?? []).effectiveMetric(preferred: .amount)
+        }
+    }
+
+    /// Denominator for the weekly chart's `percent` / `ratio` metrics. Nil when
+    /// the plan exposes no allowance (percent-only plans), which makes those
+    /// metrics fall back to usage units.
+    var weeklyChartScale: WeeklyChartScale? {
+        guard let data = usageData else { return nil }
+        if data.isCreditBased, let limit = data.planLimitCents, limit > 0 {
+            return WeeklyChartScale(total: Double(limit), basisIsCents: true)
+        }
+        if data.requestsLimit > 0 {
+            return WeeklyChartScale(total: Double(data.requestsLimit), basisIsCents: false)
+        }
+        return nil
     }
     private(set) var weeklyLastUpdated: Date?
     private(set) var weeklyConsecutiveFailureCount = 0
