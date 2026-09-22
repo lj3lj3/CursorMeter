@@ -525,14 +525,21 @@ final class UsageViewModel {
     // MARK: - Session
 
     func checkExistingSession() {
-        do {
-            if let header = try KeychainStore.loadCookieHeader() {
-                cachedCookieHeader = header
-                startSession()
-                return
+        // Only reach for the Keychain when the browser login is actually
+        // enabled (#90). Ad-hoc builds change code signature on every rebuild,
+        // so the stored item's ACL stops matching and SecItemCopyMatching
+        // answers errSecUserCanceled — an unconditional read raised a Keychain
+        // authorization prompt on every launch that could never succeed.
+        if browserLoginEnabled {
+            do {
+                if let header = try KeychainStore.loadCookieHeader() {
+                    cachedCookieHeader = header
+                    startSession()
+                    return
+                }
+            } catch {
+                Log.error("Failed to load keychain: \(error)")
             }
-        } catch {
-            Log.error("Failed to load keychain: \(error)")
         }
         // No captured cookie — the IDE source may still authenticate (#54).
         if !ideAuthSuppressed, ideCredentialProvider != nil {
@@ -859,11 +866,14 @@ final class UsageViewModel {
         // hours, and expiry timestamps must survive for interval analysis (#84).
         Log.error("Session expired, clearing keychain")
         let wasLoggedIn = (authState == .loggedIn)
+        let hadStoredCookie = cachedCookieHeader != nil
         cachedCookieHeader = nil
-        do {
-            try keychainDeleteHandler()
-        } catch {
-            Log.error("Keychain delete failed: \(error.localizedDescription)")
+        if browserLoginEnabled || hadStoredCookie {
+            do {
+                try keychainDeleteHandler()
+            } catch {
+                Log.error("Keychain delete failed: \(error.localizedDescription)")
+            }
         }
         authState = .loginRequired
         usageData = nil
@@ -1277,13 +1287,18 @@ final class UsageViewModel {
         UserDefaults.standard.set(true, for: .ideAuthSuppressed)
         activeAuthSource = nil
         lastAccountEmail = nil
+        let hadStoredCookie = cachedCookieHeader != nil
         cachedCookieHeader = nil
-        do {
-            // Through the seam (#82) — tests calling logout() must not touch
-            // the real Keychain; production default is KeychainStore.
-            try keychainDeleteHandler()
-        } catch {
-            Log.error("Keychain delete failed: \(error.localizedDescription)")
+        // Only touch the Keychain if a browser-login cookie could exist —
+        // otherwise the delete raises the same ACL prompt the read did.
+        if browserLoginEnabled || hadStoredCookie {
+            do {
+                // Through the seam (#82) — tests calling logout() must not touch
+                // the real Keychain; production default is KeychainStore.
+                try keychainDeleteHandler()
+            } catch {
+                Log.error("Keychain delete failed: \(error.localizedDescription)")
+            }
         }
         authState = .loggedOut
         usageData = nil
