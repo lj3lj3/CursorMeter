@@ -12,6 +12,18 @@ swift test               # Run all tests (requires Xcode)
 swift build -c release   # Release build
 ```
 
+### Toolchain
+
+Two toolchains are installed and they disagree:
+
+| `DEVELOPER_DIR` | Swift | Notes |
+|---|---|---|
+| Xcode.app (`/Applications/Xcode.app/Contents/Developer`) | 6.3.3 | CI parity (Xcode 16.4 / macOS 15.5 SDK). Carries XCTest — the only toolchain that can run `swift test` |
+| CommandLineTools (default, `xcode-select -p`) | 6.4 | `swift build` works; **`swift test` fails with `unable to resolve module dependency: 'XCTest'`** — CommandLineTools ships no XCTest |
+
+- Swift 6.4 requires `@main`'s `main()` to be `@MainActor`-isolated; the older toolchains required the opposite (`nonisolated`). `AppDelegate.main()` is declared without either modifier so both accept it — do not re-add `nonisolated`.
+- Run tests with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`, or switch the default once: `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`.
+
 ### App Reinstall (for testing changes)
 
 macOS does not allow overwriting a running app binary. Always follow this sequence:

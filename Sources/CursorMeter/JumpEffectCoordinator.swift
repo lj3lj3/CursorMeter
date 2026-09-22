@@ -58,9 +58,9 @@ final class JumpEffectCoordinator {
     // MARK: - Observation (Combine-free, @Observable-compatible)
 
     private func observeLastJump() {
-        withObservationTracking {
-            _ = viewModel.lastJump
-        } onChange: {
+        withObservationTracking { [weak self] in
+            _ = self?.viewModel.lastJump
+        } onChange: { [weak self] in
             // onChange is invoked on an arbitrary thread; bounce to MainActor.
             Task { @MainActor [weak self] in
                 guard let self, self.isObserving else { return }

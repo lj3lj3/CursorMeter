@@ -5,24 +5,23 @@ import AppKit
 
 @main
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
 
     // MARK: - Properties
 
     private var viewModel = UsageViewModel()
     private var statusItem: NSStatusItem!
-    private var popover: NSPopover!
+    private var statusMenu: StatusBarMenu!
     private(set) var settingsWindow: NSWindow?
     private var loginWindow: LoginWindow?
     private var eventMonitor: Any?
-    private var popoverDismissMonitor: Any?
     private var jumpCoordinator: JumpEffectCoordinator?
     private var activityWatcher: CursorActivityWatcher?
     private let notificationManager = NotificationManager()
 
     // MARK: - NSApplicationDelegate Entry Point
 
-    nonisolated static func main() {
+    static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -79,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         UNUserNotificationCenter.current().delegate = self
 
         setupStatusItem()
-        setupPopover()
+        setupStatusMenu()
         setupKeyboardShortcut()
         setupJumpCoordinator()
 
@@ -100,7 +99,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             NSEvent.removeMonitor(monitor)
             eventMonitor = nil
         }
-        removePopoverDismissMonitor()
         jumpCoordinator?.stop()
         jumpCoordinator = nil
     }
@@ -111,12 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         updateStatusItem()
 
-        if let button = statusItem.button {
-            button.action = #selector(statusItemClicked)
-            button.target = self
-            // Enable right-click to also toggle popover
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        }
+        // No click action: with `statusItem.menu` set, AppKit opens the menu
+        // and manages the button's highlighted state itself — wiring our own
+        // action here would fight both.
     }
 
     private func updateStatusItem() {
@@ -137,88 +132,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 ? CircularProgressIcon.loginRequiredImage()
                 : CircularProgressIcon.idleImage()
         }
-        let mode = UsageViewModel.resolvedMenuBarDisplayMode(
-            isPercentOnly: data.isPercentOnly, setting: viewModel.menuBarDisplayMode)
+        let mode = UsageViewModel.effectiveMenuBarDisplayMode(
+            isPercentOnly: data.isPercentOnly,
+            setting: viewModel.menuBarDisplayMode,
+            iconStyle: viewModel.menuBarIconStyle)
         switch mode {
         case 2:
-            return CircularProgressIcon.menuBarImageWithPercent(percent: data.percentUsed)
+            return CircularProgressIcon.menuBarImageWithPercent(
+                percent: data.percentUsed, style: viewModel.menuBarIconStyle)
         case 1:
             return CircularProgressIcon.menuBarImageWithText(
                 percent: data.percentUsed,
+                style: viewModel.menuBarIconStyle,
                 usedText: data.menuBarUsedText,
                 limitText: data.menuBarLimitText
             )
         default:
-            return CircularProgressIcon.menuBarImage(percent: data.percentUsed)
+            return CircularProgressIcon.menuBarImage(
+                percent: data.percentUsed, style: viewModel.menuBarIconStyle)
         }
     }
 
-    @objc private func statusItemClicked() {
-        if popover.isShown {
-            hidePopover()
-        } else {
-            showPopover()
-        }
-    }
+    // MARK: - Status menu
 
-    // MARK: - Popover
-
-    private func setupPopover() {
-        popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = true
-        popover.delegate = self
-        let popoverVC = MenuBarPopoverViewController(
+    private func setupStatusMenu() {
+        statusMenu = StatusBarMenu(
             viewModel: viewModel,
             onLogin: { [weak self] in self?.showLogin() },
-            onSettings: { [weak self] in self?.hidePopover(); self?.openSettings() }
+            onSettings: { [weak self] in self?.openSettings() }
         )
-        popoverVC.onContentSizeChange = { [weak self] size in
-            guard let self else { return }
-            // Clamp to non-zero; fittingSize can briefly report zero pre-layout.
-            guard size.width > 0, size.height > 0 else { return }
-            self.popover.contentSize = size
-        }
-        popover.contentViewController = popoverVC
-        // #94: the closed-popover updateUI skip below removes the observation
-        // pass that used to force loadView at launch. Keep building the view
-        // eagerly so first-open latency is unchanged — lazification is #95's
-        // call, gated on measured numbers.
-        popoverVC.loadViewIfNeeded()
+        statusMenu.attach(to: statusItem)
     }
 
-    private func showPopover() {
-        guard let button = statusItem.button else { return }
-        NSApp.activate(ignoringOtherApps: true)
-        // Countdown text is render-time-computed (#85); refresh it at the
-        // moment of opening rather than waiting for the next observation tick.
-        (popover.contentViewController as? MenuBarPopoverViewController)?.updateUI()
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        installPopoverDismissMonitor()
-    }
-
-    private func hidePopover() {
-        popover.performClose(nil)
-    }
-
-    // .transient on its own doesn't dismiss when the user clicks a system menu
-    // extra (Battery, Wi-Fi, etc.) because those clicks land on SystemUIServer's
-    // status items rather than a regular window. A global mouse monitor closes
-    // the popover for any out-of-app click while it's open.
-    private func installPopoverDismissMonitor() {
-        guard popoverDismissMonitor == nil else { return }
-        popoverDismissMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]
-        ) { [weak self] _ in
-            self?.hidePopover()
-        }
-    }
-
-    private func removePopoverDismissMonitor() {
-        if let monitor = popoverDismissMonitor {
-            NSEvent.removeMonitor(monitor)
-            popoverDismissMonitor = nil
-        }
+    private func showStatusMenu() {
+        statusMenu.show()
     }
 
     // MARK: - Settings Window
@@ -279,7 +226,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             guard let self else { return event }
             // Cmd+, (comma key, key code 43)
             if event.modifierFlags.contains(.command), event.keyCode == 43 {
-                hidePopover()
                 openSettings()
                 return nil // Consume the event
             }
@@ -312,6 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         withObservationTracking {
             _ = viewModel.usageData
             _ = viewModel.menuBarDisplayMode
+            _ = viewModel.menuBarIconStyle
             _ = viewModel.authState
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
@@ -378,12 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         return FileManager.default.fileExists(atPath: byName.path) ? byName : nil
     }
 
-    // MARK: - NSPopoverDelegate
 
-    func popoverDidClose(_ notification: Notification) {
-        // Covers both explicit hidePopover() and .transient auto-dismiss paths.
-        removePopoverDismissMonitor()
-    }
 
     // MARK: - UNUserNotificationCenterDelegate
 
@@ -410,7 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 if self.viewModel.browserLoginEnabled {
                     self.showLogin()
                 } else {
-                    self.showPopover()
+                    self.showStatusMenu()
                 }
             }
         case .openReleaseURL(let url):
@@ -420,7 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         case .openPopover:
             Task { @MainActor [weak self] in
                 NSApp.activate(ignoringOtherApps: true)
-                self?.showPopover()
+                self?.showStatusMenu()
             }
         case .none:
             break
@@ -449,15 +391,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             _ = viewModel.lastSuccessAt
             _ = viewModel.ideCredentialAvailable
             _ = viewModel.browserLoginEnabled
+            _ = viewModel.planUsageUnit
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                // #94: no layout pass while closed — showPopover() refreshes
-                // at open. The re-arm below must run regardless, or updates
-                // stop forever after the first skipped change.
-                if self.popover.isShown {
-                    (self.popover.contentViewController as? MenuBarPopoverViewController)?.updateUI()
-                }
+                // The menu refreshes its content in menuWillOpen, so no layout
+                // pass is needed here — only the re-arm, or updates would stop
+                // forever after the first change.
                 self.observePopover()
             }
         }
