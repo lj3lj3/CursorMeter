@@ -91,6 +91,36 @@ struct PlanUsage: Codable, Sendable {
     let limit: Int?
     let remaining: Int?
     let totalPercentUsed: Double?
+    /// Included / bonus / total pools. `used` and `limit` describe only the
+    /// `included` bucket, while `totalPercentUsed` is measured against `total`
+    /// (included + bonus). Observed on enterprise plans that grant bonus credit.
+    let breakdown: PlanBreakdown?
+
+    // Explicit init (all parameters defaulted) rather than a default value on
+    // the property: a property carrying an initial value is skipped by the
+    // synthesized `Decodable` implementation, which silently drops this field.
+    init(
+        enabled: Bool? = nil,
+        used: Int? = nil,
+        limit: Int? = nil,
+        remaining: Int? = nil,
+        totalPercentUsed: Double? = nil,
+        breakdown: PlanBreakdown? = nil
+    ) {
+        self.enabled = enabled
+        self.used = used
+        self.limit = limit
+        self.remaining = remaining
+        self.totalPercentUsed = totalPercentUsed
+        self.breakdown = breakdown
+    }
+}
+
+/// Credit pools behind a plan. Same unit as `PlanUsage.used` / `limit`.
+struct PlanBreakdown: Codable, Sendable {
+    let included: Int?
+    let bonus: Int?
+    let total: Int?
 }
 
 struct OnDemandUsage: Codable, Sendable {
@@ -250,6 +280,12 @@ struct UsageDisplayData: Sendable {
     /// UsageViewModel and is injected via `isOnDemandActive`).
     var wouldActivateOnDemand: Bool {
         guard hasOnDemand else { return false }
+        // Require evidence that on-demand is actually billing. A plan sitting
+        // exactly at its limit (used == limit) with no on-demand spend yet would
+        // otherwise flip the primary display to "$0.00 / $cap" — 0% — and, via
+        // notificationMode and the jump mode selection, silence threshold alerts
+        // and jump effects for the rest of the cycle.
+        guard (onDemandUsedCents ?? 0) > 0 else { return false }
         if requestsLimit > 0 && requestsUsed >= requestsLimit { return true }
         if isCreditBased,
            let limit = planLimitCents, limit > 0,
@@ -400,10 +436,26 @@ struct UsageDisplayData: Sendable {
         // path intact — a real `plan` always wins.
         let overall = summary.individualUsage?.overall
         let isTokenBased = plan == nil && overall != nil
-        let planUsedCents = plan?.used ?? overall?.used
-        let planLimitCents = plan?.limit
+        var planUsedCents = plan?.used ?? overall?.used
+        var planLimitCents = plan?.limit
             ?? overall?.limit
             ?? perUserMonthlyLimitDollars.map { $0 * 100 }
+
+        // Bonus-credit plans: `used`/`limit` cover only the `included` bucket,
+        // while `totalPercentUsed` is measured against `breakdown.total`
+        // (included + bonus). Rendering `used / limit` reports 100% the moment
+        // the included bucket empties even though bonus credit remains —
+        // observed 2026-09-21 on an enterprise account reporting used/limit
+        // 2000/2000 alongside breakdown.total 119,964 and totalPercentUsed
+        // 95.97 (the dashboard showed 96%). Adopt the breakdown scale and
+        // derive the consumed amount from the server percentage: the API
+        // exposes no combined `used` field.
+        if let total = plan?.breakdown?.total, total > 0,
+           let percent = plan?.totalPercentUsed
+        {
+            planLimitCents = total
+            planUsedCents = Int((percent / 100.0 * Double(total)).rounded())
+        }
 
         // On-demand. Non-token plans use the API's on-demand block (team-wide on
         // enterprise). Token-based members instead get a PERSONAL view: spend

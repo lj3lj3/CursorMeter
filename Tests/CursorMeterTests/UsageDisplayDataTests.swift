@@ -850,6 +850,7 @@ final class UsageDisplayDataTests: XCTestCase {
         let data = makeOnDemandData(
             requestsUsed: 757,
             requestsLimit: 500,
+            onDemandUsedCents: 584,
             onDemandLimitCents: 4000,
             onDemandEnabled: true
         )
@@ -860,10 +861,34 @@ final class UsageDisplayDataTests: XCTestCase {
         let data = makeOnDemandData(
             requestsUsed: 500,
             requestsLimit: 500,
+            onDemandUsedCents: 584,
             onDemandLimitCents: 4000,
             onDemandEnabled: true
         )
         XCTAssertTrue(data.wouldActivateOnDemand)
+    }
+
+    /// A plan sitting exactly at its limit with no on-demand spend yet must NOT
+    /// flip to on-demand: the primary display would read "$0.00 / $cap" (0%) and
+    /// silence threshold notifications for the rest of the cycle.
+    func test_wouldActivate_atLimitWithoutOnDemandSpend_noActivation() {
+        let requestBoundary = makeOnDemandData(
+            requestsUsed: 500,
+            requestsLimit: 500,
+            onDemandUsedCents: 0,
+            onDemandLimitCents: 15900,
+            onDemandEnabled: true
+        )
+        XCTAssertFalse(requestBoundary.wouldActivateOnDemand)
+
+        let creditBoundary = makeOnDemandData(
+            planUsedCents: 2000,
+            planLimitCents: 2000,
+            onDemandUsedCents: 0,
+            onDemandLimitCents: 15900,
+            onDemandEnabled: true
+        )
+        XCTAssertFalse(creditBoundary.wouldActivateOnDemand)
     }
 
     func test_wouldActivate_underQuota() {
@@ -892,6 +917,7 @@ final class UsageDisplayDataTests: XCTestCase {
             planLimitCents: 2000,
             requestsUsed: 0,
             requestsLimit: 0,
+            onDemandUsedCents: 584,
             onDemandLimitCents: 4000,
             onDemandEnabled: true
         )
@@ -1039,6 +1065,88 @@ final class UsageDisplayDataTests: XCTestCase {
         XCTAssertEqual(data.onDemandLimitCents, 4000)
         XCTAssertEqual(data.onDemandEnabled, true)
         XCTAssertTrue(data.hasOnDemand)
+    }
+
+    // MARK: - Bonus-credit plans (breakdown scale)
+
+    /// Live enterprise payload, 2026-09-21. `plan.used/limit` describes only the
+    /// included bucket (2000/2000 → a misleading 100%), while the dashboard
+    /// reported 96%: the real pool is `breakdown.total` (119,964) and
+    /// `totalPercentUsed` (95.9712) is measured against it.
+    private static let enterpriseBonusPayload = Data(#"""
+    {
+        "billingCycleStart": "2026-08-30T16:06:35.000Z",
+        "billingCycleEnd": "2026-09-30T16:06:35.000Z",
+        "membershipType": "enterprise",
+        "limitType": "team",
+        "isUnlimited": false,
+        "autoModelSelectedDisplayMessage": "You've used 96% of your included total usage",
+        "individualUsage": {
+            "plan": {
+                "enabled": true, "used": 2000, "limit": 2000, "remaining": 0,
+                "breakdown": { "included": 2000, "bonus": 117964, "total": 119964 },
+                "autoPercentUsed": 100, "apiPercentUsed": 74.505, "totalPercentUsed": 95.9712
+            },
+            "onDemand": { "enabled": true, "used": 0, "limit": 15900, "remaining": 15900 }
+        },
+        "teamUsage": {
+            "onDemand": { "enabled": true, "used": 463288002, "limit": 700000000, "remaining": 236711998 }
+        }
+    }
+    """#.utf8)
+
+    private func decodeEnterpriseBonusPayload() throws -> UsageSummaryResponse {
+        try JSONDecoder().decode(UsageSummaryResponse.self, from: Self.enterpriseBonusPayload)
+    }
+
+    func test_bonusCreditPlan_decodesBreakdown() throws {
+        let summary = try decodeEnterpriseBonusPayload()
+        XCTAssertEqual(summary.individualUsage?.plan?.breakdown?.total, 119964)
+        XCTAssertEqual(summary.individualUsage?.plan?.breakdown?.bonus, 117964)
+        let percent = try XCTUnwrap(summary.individualUsage?.plan?.totalPercentUsed)
+        XCTAssertEqual(percent, 95.9712, accuracy: 0.0001)
+    }
+
+    func test_bonusCreditPlan_adoptsBreakdownScale() throws {
+        let summary = try decodeEnterpriseBonusPayload()
+        let usage = makeUsageResponse(numRequests: 0, maxRequestUsage: nil)
+
+        let data = UsageDisplayData.from(
+            summary: summary, usage: usage,
+            userInfo: UserInfoResponse(email: "ent@test.com", name: "Ent"))
+
+        XCTAssertTrue(data.isCreditBased)
+        XCTAssertEqual(data.planLimitCents, 119964, "Limit must be the full pool, not the included bucket")
+        // No combined `used` field exists — derive it from the server percentage.
+        XCTAssertEqual(data.planUsedCents, 115131)
+        XCTAssertEqual(data.percentUsed, 95.9712, accuracy: 0.01, "Must match the dashboard's 96%, not 100%")
+        XCTAssertEqual(data.percentText, "96.0%")
+        XCTAssertEqual(data.usageText, "$1151.31 / $1199.64")
+    }
+
+    func test_bonusCreditPlan_atIncludedLimit_doesNotLatchOnDemand() throws {
+        let summary = try decodeEnterpriseBonusPayload()
+        let usage = makeUsageResponse(numRequests: 0, maxRequestUsage: nil)
+
+        let data = UsageDisplayData.from(
+            summary: summary, usage: usage,
+            userInfo: UserInfoResponse(email: "ent@test.com", name: "Ent"))
+
+        XCTAssertTrue(data.hasOnDemand)
+        XCTAssertFalse(data.wouldActivateOnDemand, "Zero on-demand spend must not flip the primary display to 0%")
+        XCTAssertEqual(data.usageLabel, "Plan Usage")
+        XCTAssertEqual(data.onDemandText, "$0.00 / $159.00")
+    }
+
+    func test_bonusCreditPlan_ignoresTeamOnDemandPool() throws {
+        let summary = try decodeEnterpriseBonusPayload()
+        let usage = makeUsageResponse(numRequests: 0, maxRequestUsage: nil)
+
+        let data = UsageDisplayData.from(
+            summary: summary, usage: usage,
+            userInfo: UserInfoResponse(email: "ent@test.com", name: "Ent"))
+
+        XCTAssertEqual(data.onDemandLimitCents, 15900, "Must be the personal cap, not the team pool")
     }
 
     // MARK: - Helpers
