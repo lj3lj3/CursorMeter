@@ -1,6 +1,7 @@
 import XCTest
 @testable import CursorMeter
 
+@MainActor
 final class CircularProgressIconTests: XCTestCase {
 
     // MARK: - ProgressLevel
@@ -40,18 +41,18 @@ final class CircularProgressIconTests: XCTestCase {
     // MARK: - Menu Bar Image
 
     func testMenuBarImageNotNil() {
-        let image = CircularProgressIcon.menuBarImage(percent: 50)
+        let image = CircularProgressIcon.menuBarImage(percent: 50, style: .pie)
         XCTAssertEqual(image.size.width, 18)
         XCTAssertEqual(image.size.height, 18)
     }
 
     func testMenuBarImageZeroPercent() {
-        let image = CircularProgressIcon.menuBarImage(percent: 0)
+        let image = CircularProgressIcon.menuBarImage(percent: 0, style: .pie)
         XCTAssertEqual(image.size.width, 18)
     }
 
     func testMenuBarImageNotTemplate() {
-        let image = CircularProgressIcon.menuBarImage(percent: 50)
+        let image = CircularProgressIcon.menuBarImage(percent: 50, style: .pie)
         XCTAssertFalse(image.isTemplate)
     }
 
@@ -59,7 +60,7 @@ final class CircularProgressIconTests: XCTestCase {
 
     func testMenuBarImageWithTextNotNil() {
         let image = CircularProgressIcon.menuBarImageWithText(
-            percent: 50, usedText: "150", limitText: "500"
+            percent: 50, style: .pie, usedText: "150", limitText: "500"
         )
         XCTAssertGreaterThan(image.size.width, 0)
         XCTAssertEqual(image.size.height, 22)
@@ -67,7 +68,7 @@ final class CircularProgressIconTests: XCTestCase {
 
     func testMenuBarImageWithTextCreditFormat() {
         let image = CircularProgressIcon.menuBarImageWithText(
-            percent: 25, usedText: "12.5", limitText: "50.0"
+            percent: 25, style: .pie, usedText: "12.5", limitText: "50.0"
         )
         XCTAssertGreaterThan(image.size.width, 0)
         XCTAssertFalse(image.isTemplate)
@@ -76,18 +77,18 @@ final class CircularProgressIconTests: XCTestCase {
     // MARK: - Menu Bar Image With Percent
 
     func testMenuBarImageWithPercentNotNil() {
-        let image = CircularProgressIcon.menuBarImageWithPercent(percent: 75)
+        let image = CircularProgressIcon.menuBarImageWithPercent(percent: 75, style: .pie)
         XCTAssertGreaterThan(image.size.width, 0)
         XCTAssertEqual(image.size.height, 22)
     }
 
     func testMenuBarImageWithPercentNotTemplate() {
-        let image = CircularProgressIcon.menuBarImageWithPercent(percent: 50)
+        let image = CircularProgressIcon.menuBarImageWithPercent(percent: 50, style: .pie)
         XCTAssertFalse(image.isTemplate)
     }
 
     func testMenuBarImageWithPercentZero() {
-        let image = CircularProgressIcon.menuBarImageWithPercent(percent: 0)
+        let image = CircularProgressIcon.menuBarImageWithPercent(percent: 0, style: .pie)
         XCTAssertGreaterThan(image.size.width, 0)
     }
 

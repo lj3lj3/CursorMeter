@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CursorMeter — cube + crease: angle &amp; size</title>
+<style>
+  body {
+    margin: 0; padding: 36px 40px 60px;
+    font: 13px/1.5 -apple-system, "SF Pro Text", system-ui, sans-serif;
+    background: #f5f5f7; color: #1d1d1f;
+  }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 26px; color: #6e6e73; max-width: 640px; }
+  .group { margin-bottom: 26px; }
+  .group h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+    color: #86868b; margin: 0 0 4px; font-weight: 600;
+  }
+  .group p.note { margin: 0 0 12px; color: #86868b; font-size: 12px; }
+  .row { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-end; }
+  .cell { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+  .bar { display: flex; align-items: center; justify-content: center; border-radius: 8px; }
+  .bar.dark { background: #1e1e1e; }
+  .bar.light { background: #f2f2f2; box-shadow: inset 0 0 0 1px #d8d8dc; }
+  .label { font: 11px ui-monospace, monospace; color: #86868b; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+
+<h1>Cube + crease — angle &amp; size</h1>
+<p class="sub">
+  The crease now lies <em>on</em> the cube's top face: it goes through the same isometric
+  basis as the face (apex → upper-right, apex → upper-left), so it is sheared and tilted
+  with the plane instead of standing upright in front of it. Below: the flat-on-face
+  version at four sizes, then the upright version for comparison.
+</p>
+
+<div class="group">
+  <h2>Flat on the top face — pick a size</h2>
+  <p class="note">creaseScale = fraction of the top face the glyph's own height occupies</p>
+  <div class="row" id="flat"></div>
+</div>
+
+<div class="group">
+  <h2>Upright (what it looked like before) — for contrast</h2>
+  <div class="row" id="upright"></div>
+</div>
+
+<div class="group">
+  <h2>Magnified, flat on face, scale 0.72</h2>
+  <div class="row" id="big"></div>
+</div>
+
+<script>
+const ASP = 0.836;              // crease glyph w : h
+const A = 43.3, H = 25;         // cube half-width, face half-height (unit box: 86.6 x 100)
+const APEX = { x: 43.3, y: 0 };
+
+// crease glyph, normalized in its own box, y running downwards
+const P = {
+  left:   [0.000, 0.552],
+  top:    [1.000, 0.000],
+  elbow:  [0.574, 0.617],
+  bottom: [0.928, 1.000],
+};
+
+// map through the top face's isometric basis: (px,py) in face space -> screen
+function onFace(px, py) {
+  return { x: APEX.x + (px - py) * A, y: APEX.y + (px + py) * H };
+}
+
+function flatPlace(s) {
+  return (x, y) => {
+    const px = 0.5 + (x - 0.5) * ASP * s;
+    const py = 0.5 + (y - 0.5) * s;
+    return onFace(px, py);
+  };
+}
+
+function uprightPlace(frac) {
+  const gh = 100 * frac, gw = gh * ASP;
+  return (x, y) => ({ x: 43.3 - gw / 2 + x * gw, y: 50 - gh / 2 + y * gh });
+}
+
+function creasePaths(place) {
+  const pt = k => place(P[k][0], P[k][1]);
+  const f = p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
+  return `
+    <polygon points="${f(pt('left'))} ${f(pt('top'))} ${f(pt('elbow'))}" fill="currentColor" opacity="1"/>
+    <polygon points="${f(pt('top'))} ${f(pt('bottom'))} ${f(pt('elbow'))}" fill="currentColor" opacity="0.72"/>`;
+}
+
+const CUBE = `
+  <polygon points="43.3,0 86.6,25 43.3,50 0,25" fill="currentColor" opacity="0.30"/>
+  <polygon points="0,25 43.3,50 43.3,100 0,75" fill="currentColor" opacity="0.22"/>
+  <polygon points="43.3,50 86.6,25 86.6,75 43.3,100" fill="currentColor" opacity="0.17"/>
+  <g stroke="currentColor" fill="none" opacity="0.50" stroke-width="4" stroke-linejoin="round">
+    <polygon points="43.3,0 86.6,25 86.6,75 43.3,100 0,75 0,25"/>
+    <path d="M43.3,50 L43.3,100 M43.3,50 L0,25 M43.3,50 L86.6,25"/>
+  </g>`;
+
+function cell(host, svgInner, size, mode, label) {
+  const w = size * 0.866;
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  const bar = document.createElement('div');
+  bar.className = 'bar ' + mode;
+  bar.style.color = mode === 'dark' ? '#fff' : '#000';
+  bar.style.width = Math.max(w, 26) + 'px';
+  bar.style.height = Math.max(size, 22) + 'px';
+  bar.innerHTML = `<svg width="${w}" height="${size}" viewBox="0 0 86.6 100">${svgInner}</svg>`;
+  const lab = document.createElement('div');
+  lab.className = 'label';
+  lab.textContent = label;
+  cell.appendChild(bar); cell.appendChild(lab);
+  host.appendChild(cell);
+}
+
+const flat = document.getElementById('flat');
+for (const s of [0.55, 0.65, 0.72, 0.80]) {
+  const inner = CUBE + creasePaths(flatPlace(s));
+  cell(flat, inner, 18, 'dark', `${s} · 18pt`);
+  cell(flat, inner, 20, 'light', `${s} · 20pt`);
+}
+
+const upright = document.getElementById('upright');
+for (const f of [0.56, 0.72]) {
+  const inner = CUBE + creasePaths(uprightPlace(f));
+  cell(upright, inner, 18, 'dark', `${f} · 18pt`);
+  cell(upright, inner, 20, 'light', `${f} · 20pt`);
+}
+
+const big = document.getElementById('big');
+const bigInner = CUBE + creasePaths(flatPlace(0.72));
+for (const mode of ['dark', 'light']) {
+  cell(big, bigInner, 96, mode, `96pt ${mode}`);
+  cell(big, bigInner, 160, mode, `160pt ${mode}`);
+}
+</script>
+
+</body>
+</html>

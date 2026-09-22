@@ -11,6 +11,8 @@ final class SettingsAppearanceTabViewController: NSViewController {
     // MARK: - Controls (retained as instance vars for updateUI)
 
     private var menuBarDisplayPopUp = NSPopUpButton()
+    private var menuBarIconStylePopUp = NSPopUpButton()
+    private var planUsageUnitSegmented = NSSegmentedControl()
     private var jumpEffectToggle = NSSwitch()
     private var jumpIntensitySegmented = NSSegmentedControl()
     private var jumpGlyphStyleSegmented = NSSegmentedControl()
@@ -20,8 +22,7 @@ final class SettingsAppearanceTabViewController: NSViewController {
     private var jumpSubRowsContainer = NSView()
     private var weeklyChartToggle = NSSwitch()
     private var weeklyChartStyleSegmented = NSSegmentedControl()
-    private var weeklyChartMetricPopUp = NSPopUpButton()
-    private let weeklyChartMetricCaption = SettingsCardFactory.makeCaption("")
+
     /// Header + card container.
     private var weeklyChartSection = NSView()
 
@@ -80,6 +81,8 @@ final class SettingsAppearanceTabViewController: NSViewController {
         }
         menuBarDisplayPopUp.selectItem(withTag: UsageViewModel.resolvedMenuBarDisplayMode(
             isPercentOnly: percentOnly, setting: viewModel.menuBarDisplayMode))
+        menuBarIconStylePopUp.selectItem(withTag: viewModel.menuBarIconStyle.rawValue)
+        planUsageUnitSegmented.selectedSegment = viewModel.planUsageUnit.rawValue
 
         jumpEffectToggle.state = viewModel.jumpEffectEnabled ? .on : .off
         jumpIntensitySegmented.selectedSegment = viewModel.jumpIntensity.rawValue
@@ -91,21 +94,6 @@ final class SettingsAppearanceTabViewController: NSViewController {
         weeklyChartToggle.state = viewModel.weeklyChartEnabled ? .on : .off
         weeklyChartStyleSegmented.selectedSegment = viewModel.weeklyChartStyle.rawValue
         weeklyChartStyleSegmented.isEnabled = viewModel.weeklyChartEnabled
-        updateWeeklyChartMetric()
-    }
-
-    private func updateWeeklyChartMetric() {
-        let amountAvailable = viewModel.weeklyData?.isAmountAvailable == true
-        weeklyChartMetricPopUp.item(at: 0)?.isEnabled = amountAvailable
-        weeklyChartMetricPopUp.selectItem(at: viewModel.effectiveWeeklyChartMetric == .amount ? 0 : 1)
-        weeklyChartMetricPopUp.isEnabled = viewModel.weeklyChartEnabled
-        if !amountAvailable {
-            weeklyChartMetricCaption.stringValue = "Amount unavailable for this history; showing usage units."
-        } else if viewModel.effectiveWeeklyChartMetric == .amount {
-            weeklyChartMetricCaption.stringValue = "Total usage value, including plan-covered usage."
-        } else {
-            weeklyChartMetricCaption.stringValue = "Weighted activity, not the number of requests."
-        }
     }
 
     // MARK: - Cards
@@ -127,9 +115,30 @@ final class SettingsAppearanceTabViewController: NSViewController {
         menuBarDisplayPopUp.target = self
         menuBarDisplayPopUp.action = #selector(menuBarDisplayModeChanged)
 
+        menuBarIconStylePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        menuBarIconStylePopUp.addItems(withTitles: MenuBarIconStyle.allCases.map(\.label))
+        for (index, item) in menuBarIconStylePopUp.itemArray.enumerated() {
+            item.tag = index
+        }
+        menuBarIconStylePopUp.target = self
+        menuBarIconStylePopUp.action = #selector(menuBarIconStyleChanged)
+
+        planUsageUnitSegmented = NSSegmentedControl(
+            labels: PlanUsageUnit.allCases.map(\.label),
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(planUsageUnitChanged)
+        )
+
         return SettingsCardFactory.makeCard(units: [
             SettingsCardFactory.makeCardRow(
                 title: "Usage text next to icon", control: menuBarDisplayPopUp),
+            SettingsCardFactory.makeDividedUnit(SettingsCardFactory.makeCardRow(
+                title: "Icon", control: menuBarIconStylePopUp)),
+            SettingsCardFactory.makeDividedUnit(SettingsCardFactory.makeCardRow(
+                title: "Popover shows",
+                caption: "Which figure leads the popover's usage section.",
+                control: planUsageUnitSegmented)),
         ])
     }
 
@@ -193,37 +202,12 @@ final class SettingsAppearanceTabViewController: NSViewController {
             action: #selector(weeklyChartStyleChanged)
         )
 
-        weeklyChartMetricPopUp.addItems(withTitles: ["Amount", "Usage units"])
-        weeklyChartMetricPopUp.autoenablesItems = false
-        weeklyChartMetricPopUp.setAccessibilityLabel("Chart metric")
-        weeklyChartMetricPopUp.target = self
-        weeklyChartMetricPopUp.action = #selector(weeklyChartMetricChanged)
-        let metricRow = SettingsCardFactory.makeCardRow(title: "Chart metric", control: weeklyChartMetricPopUp)
-        let captionHost = NSView()
-        weeklyChartMetricCaption.translatesAutoresizingMaskIntoConstraints = false
-        captionHost.addSubview(weeklyChartMetricCaption)
-        NSLayoutConstraint.activate([
-            weeklyChartMetricCaption.leadingAnchor.constraint(equalTo: captionHost.leadingAnchor, constant: 14),
-            weeklyChartMetricCaption.trailingAnchor.constraint(equalTo: captionHost.trailingAnchor, constant: -14),
-            weeklyChartMetricCaption.topAnchor.constraint(equalTo: captionHost.topAnchor),
-            weeklyChartMetricCaption.bottomAnchor.constraint(equalTo: captionHost.bottomAnchor, constant: -10),
-        ])
-        let metricUnit = NSStackView(views: [metricRow, captionHost])
-        metricUnit.orientation = .vertical
-        metricUnit.alignment = .leading
-        metricUnit.spacing = 0
-        for row in metricUnit.arrangedSubviews {
-            row.translatesAutoresizingMaskIntoConstraints = false
-            row.widthAnchor.constraint(equalTo: metricUnit.widthAnchor).isActive = true
-        }
-
         return SettingsCardFactory.makeCard(units: [
             SettingsCardFactory.makeCardRow(
                 title: "Show weekly chart",
-                caption: "Rolling 7-day usage.",
+                caption: "Rolling 7-day usage, in the unit chosen under “Popover shows”.",
                 control: weeklyChartToggle
             ),
-            SettingsCardFactory.makeDividedUnit(metricUnit),
             SettingsCardFactory.makeDividedUnit(SettingsCardFactory.makeCardRow(
                 title: "Today", control: weeklyChartStyleSegmented)),
         ])
@@ -234,6 +218,18 @@ final class SettingsAppearanceTabViewController: NSViewController {
     @objc private func menuBarDisplayModeChanged() {
         guard let tag = menuBarDisplayPopUp.selectedItem?.tag else { return }
         viewModel.setMenuBarDisplayMode(tag)
+    }
+
+    @objc private func menuBarIconStyleChanged() {
+        guard let tag = menuBarIconStylePopUp.selectedItem?.tag,
+              let style = MenuBarIconStyle(rawValue: tag) else { return }
+        viewModel.setMenuBarIconStyle(style)
+    }
+
+    @objc private func planUsageUnitChanged() {
+        let raw = planUsageUnitSegmented.selectedSegment
+        guard let unit = PlanUsageUnit(rawValue: raw) else { return }
+        viewModel.setPlanUsageUnit(unit)
     }
 
     @objc private func jumpEffectToggleChanged() {
@@ -262,7 +258,6 @@ final class SettingsAppearanceTabViewController: NSViewController {
         let enabled = weeklyChartToggle.state == .on
         viewModel.setWeeklyChartEnabled(enabled)
         weeklyChartStyleSegmented.isEnabled = enabled
-        updateWeeklyChartMetric()
     }
 
     @objc private func weeklyChartStyleChanged() {
@@ -271,9 +266,4 @@ final class SettingsAppearanceTabViewController: NSViewController {
         viewModel.setWeeklyChartStyle(style)
     }
 
-    @objc private func weeklyChartMetricChanged() {
-        let metric: WeeklyChartMetric = weeklyChartMetricPopUp.indexOfSelectedItem == 0 ? .amount : .usageUnits
-        viewModel.setWeeklyChartMetric(metric)
-        updateWeeklyChartMetric()
-    }
 }

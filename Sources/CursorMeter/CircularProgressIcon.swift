@@ -41,19 +41,26 @@ enum CircularProgressIcon {
         return accentColor
     }
 
-    /// Pie chart icon only
-    static func menuBarImage(percent: Double, size: CGFloat = 18) -> NSImage {
+    /// Icon only, drawn in the requested style.
+    @MainActor
+    static func menuBarImage(percent: Double, style: MenuBarIconStyle, size: CGFloat = 18) -> NSImage {
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
-            drawPie(in: ctx, rect: rect, percent: percent)
+            drawGlyph(in: ctx, rect: rect, percent: percent, style: style)
             return true
         }
         image.isTemplate = false
         return image
     }
 
-    /// Pie chart + fraction text (used / limit) as a single NSImage
-    static func menuBarImageWithText(percent: Double, usedText: String, limitText: String) -> NSImage {
+    /// Icon + fraction text (used / limit) as a single NSImage
+    @MainActor
+    static func menuBarImageWithText(
+        percent: Double,
+        style: MenuBarIconStyle,
+        usedText: String,
+        limitText: String
+    ) -> NSImage {
         let pieSize: CGFloat = 20
         let font = NSFont.monospacedDigitSystemFont(ofSize: 8, weight: .medium)
         let textColor = NSColor.labelColor
@@ -83,7 +90,7 @@ enum CircularProgressIcon {
             ctx.saveGState()
             ctx.translateBy(x: 0, y: pieY)
             let pieRect = CGRect(x: 0, y: 0, width: pieSize, height: pieSize)
-            drawPie(in: ctx, rect: pieRect, percent: percent)
+            drawGlyph(in: ctx, rect: pieRect, percent: percent, style: style)
             ctx.restoreGState()
 
             // Draw fraction text (vertically centered)
@@ -116,13 +123,14 @@ enum CircularProgressIcon {
         return image
     }
 
-    /// Pie chart + percent text as a single NSImage
-    static func menuBarImageWithPercent(percent: Double) -> NSImage {
+    /// Icon + percent text as a single NSImage
+    @MainActor
+    static func menuBarImageWithPercent(percent: Double, style: MenuBarIconStyle) -> NSImage {
         let pieSize: CGFloat = 20
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         let textColor = NSColor.labelColor
 
-        let percentStr = NSAttributedString(string: "\(Int(percent.rounded()))%", attributes: [
+        let percentStr = NSAttributedString(string: String(format: "%.1f%%", percent), attributes: [
             .font: font, .foregroundColor: textColor,
         ])
         let textSize = percentStr.size()
@@ -139,7 +147,7 @@ enum CircularProgressIcon {
             ctx.saveGState()
             ctx.translateBy(x: 0, y: pieY)
             let pieRect = CGRect(x: 0, y: 0, width: pieSize, height: pieSize)
-            drawPie(in: ctx, rect: pieRect, percent: percent)
+            drawGlyph(in: ctx, rect: pieRect, percent: percent, style: style)
             ctx.restoreGState()
 
             // Draw percent text (vertically centered)
@@ -287,7 +295,189 @@ enum CircularProgressIcon {
         tokenColor(for: percent)
     }
 
-    private static func drawPie(in ctx: CGContext, rect: CGRect, percent: Double) {
+    // MARK: - Glyph (menu-bar icon styles)
+
+    /// Draws the icon body for `style` into `rect`. Every style is monochrome:
+    /// the menu bar slot is rendered with `labelColor` so it matches the rest
+    /// of the menu bar in both appearances.
+    private static func drawGlyph(
+        in ctx: CGContext,
+        rect: CGRect,
+        percent: Double,
+        style: MenuBarIconStyle
+    ) {
+        func drawMark(in markRect: CGRect) { drawCursorMark(in: ctx, rect: markRect) }
+
+        switch style {
+        case .pie:
+            // Legacy shape, de-colored: track at 20% vs full-strength wedge
+            // still reads as progress without introducing a hue.
+            drawPie(in: ctx, rect: rect, percent: percent, color: NSColor.labelColor)
+        case .cursor:
+            let barHeight = max(1.5, rect.height * 0.11)
+            let gap: CGFloat = 2
+            var glyphRect = rect
+            glyphRect.size.height -= (barHeight + gap)
+            // Lift the cube off the bottom: in this y-up context a CGRect's
+            // origin is its lower-left corner, so shrinking the height alone
+            // keeps the cube sitting on the bar.
+            glyphRect.origin.y += (barHeight + gap)
+            drawMark(in: glyphRect)
+            drawUnderlineProgress(in: ctx, rect: rect, percent: percent, barHeight: barHeight)
+        case .ring:
+            drawRing(in: ctx, rect: rect, percent: percent)
+            drawMark(in: rect.insetBy(dx: rect.width * 0.30, dy: rect.height * 0.26))
+        case .cursorText:
+            // The cube is drawn next to 13pt percent text in a 20pt slot; at
+            // full size it dwarfs the digits. Inset to roughly the text's
+            // visual height so the two read as one unit.
+            drawMark(in: rect.insetBy(dx: rect.width * 0.10, dy: rect.height * 0.10))
+        case .badge:
+            drawMark(in: rect.insetBy(dx: rect.width * 0.12, dy: rect.height * 0.10))
+            drawBadgeRing(in: ctx, rect: rect, percent: percent)
+        }
+    }
+
+    /// Width : height of the cube's bounding box (2a wide by 4a/√3 tall).
+    private static let cursorMarkAspect: CGFloat = 0.866
+
+    /// Cursor's mark: a solid isometric cube with the brand's crease carved out
+    /// of it.
+    ///
+    /// The construction is Cursor's own, read off `cursor.com/favicon.svg`
+    /// (512×512): one subpath is the cube's hexagon, the second runs backwards
+    /// through it and is knocked out, leaving the crease as a hole. The crease's
+    /// four points land on the cube's own landmarks rather than being a glyph
+    /// pasted on top:
+    ///   crease left tip   → cube upper-left vertex
+    ///   crease top tip    → cube upper-right vertex
+    ///   crease bottom tip → cube bottom vertex
+    ///   crease elbow      → cube centre
+    /// so it crosses the top, left and right faces in one folded band. The
+    /// vertices are pulled ~6% toward the middle (the official art insets them
+    /// too) so the crease reads as a fold *inside* the silhouette instead of
+    /// splitting it.
+    ///
+    /// Drawn rather than loaded from the IDE bundle: the app icon is full-colour
+    /// artwork on a squircle, and in the menu bar — where every neighbouring
+    /// icon is a monochrome template — it reads as a foreign block. Painting
+    /// with `labelColor` keeps it white on dark menu bars and black on light
+    /// ones, like the rest of the bar.
+    private static func drawCursorMark(in ctx: CGContext, rect: CGRect) {
+        var box = rect
+        if box.width / box.height > cursorMarkAspect {
+            box.size.width = box.height * cursorMarkAspect
+            box.origin.x = rect.midX - box.width / 2
+        } else {
+            box.size.height = box.width / cursorMarkAspect
+            box.origin.y = rect.midY - box.height / 2
+        }
+
+        let a = box.width / 2
+        let h = a / Double(3).squareRoot()
+        let cx = box.midX
+        let cy = box.midY
+
+        // The image is built with `flipped: false`, so this context is y-up:
+        // a larger y sits higher on screen. The cube's landmarks are named for
+        // what the eye sees, which is the opposite of the raw axis — getting
+        // this backwards renders the whole cube upside down.
+        let apex = CGPoint(x: cx, y: cy + 2 * h)
+        let upperRight = CGPoint(x: cx + a, y: cy + h)
+        let lowerRight = CGPoint(x: cx + a, y: cy - h)
+        let base = CGPoint(x: cx, y: cy - 2 * h)
+        let lowerLeft = CGPoint(x: cx - a, y: cy - h)
+        let upperLeft = CGPoint(x: cx - a, y: cy + h)
+        let centre = CGPoint(x: cx, y: cy)
+
+        // Solid cube.
+        ctx.setFillColor(NSColor.labelColor.cgColor)
+        ctx.addLines(between: [apex, upperRight, lowerRight, base, lowerLeft, upperLeft])
+        ctx.closePath()
+        ctx.fillPath()
+
+        // Knock the crease out. The concave quad is the two triangles of
+        // Cursor's own `cursor_mini.svg` (A,B,C and D,B,C — C is the elbow,
+        // shared by both), remapped onto the cube's vertices.
+        let inset: CGFloat = 0.06
+        func pull(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: cx + (p.x - cx) * (1 - inset),
+                    y: cy + (p.y - cy) * (1 - inset))
+        }
+        let creaseLeft = pull(upperLeft)
+        let creaseTop = pull(upperRight)
+        let creaseBottom = pull(base)
+        let creaseElbow = centre
+
+        ctx.setBlendMode(.destinationOut)
+        ctx.setFillColor(NSColor.black.cgColor)
+        for triangle in [
+            [creaseLeft, creaseTop, creaseElbow],
+            [creaseBottom, creaseTop, creaseElbow],
+        ] {
+            ctx.addLines(between: triangle)
+            ctx.closePath()
+            ctx.fillPath()
+        }
+        ctx.setBlendMode(.normal)
+    }
+
+    private static func drawRing(in ctx: CGContext, rect: CGRect, percent: Double) {
+        let lineWidth = max(1.2, rect.width * 0.11)
+        let radius = (min(rect.width, rect.height) - lineWidth) / 2
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+
+        ctx.setStrokeColor(NSColor.labelColor.withAlphaComponent(0.25).cgColor)
+        ctx.setLineWidth(lineWidth)
+        ctx.addArc(center: center, radius: radius, startAngle: 0, endAngle: 2 * .pi, clockwise: false)
+        ctx.strokePath()
+
+        let progress = min(max(percent / 100.0, 0), 1.0)
+        guard progress > 0 else { return }
+        ctx.setStrokeColor(NSColor.labelColor.cgColor)
+        ctx.setLineCap(.round)
+        let start = CGFloat.pi / 2
+        ctx.addArc(center: center, radius: radius, startAngle: start,
+                   endAngle: start - 2 * .pi * progress, clockwise: true)
+        ctx.strokePath()
+    }
+
+    private static func drawUnderlineProgress(
+        in ctx: CGContext, rect: CGRect, percent: Double, barHeight: CGFloat
+    ) {
+        let track = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: barHeight)
+        let radius = barHeight / 2
+        ctx.setFillColor(NSColor.labelColor.withAlphaComponent(0.25).cgColor)
+        ctx.addPath(CGPath(roundedRect: track, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        ctx.fillPath()
+
+        let progress = min(max(percent / 100.0, 0), 1.0)
+        guard progress > 0 else { return }
+        var fill = track
+        fill.size.width = max(barHeight, track.width * CGFloat(progress))
+        ctx.setFillColor(NSColor.labelColor.cgColor)
+        ctx.addPath(CGPath(roundedRect: fill, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        ctx.fillPath()
+    }
+
+    private static func drawBadgeRing(in ctx: CGContext, rect: CGRect, percent: Double) {
+        let radius = rect.width * 0.22
+        let center = CGPoint(x: rect.maxX - radius, y: rect.maxY - radius)
+        ctx.setLineWidth(max(1, radius * 0.55))
+        ctx.setStrokeColor(NSColor.labelColor.withAlphaComponent(0.25).cgColor)
+        ctx.addArc(center: center, radius: radius, startAngle: 0, endAngle: 2 * .pi, clockwise: false)
+        ctx.strokePath()
+
+        let progress = min(max(percent / 100.0, 0), 1.0)
+        guard progress > 0 else { return }
+        ctx.setStrokeColor(NSColor.labelColor.cgColor)
+        let start = CGFloat.pi / 2
+        ctx.addArc(center: center, radius: radius, startAngle: start,
+                   endAngle: start - 2 * .pi * progress, clockwise: true)
+        ctx.strokePath()
+    }
+
+    private static func drawPie(in ctx: CGContext, rect: CGRect, percent: Double, color: NSColor? = nil) {
         let inset: CGFloat = 1
         let center = CGPoint(x: rect.midX, y: rect.midY)
         let radius = (min(rect.width, rect.height) - inset * 2) / 2
@@ -308,7 +498,7 @@ enum CircularProgressIcon {
         // Pie wedge
         let progress = min(max(percent / 100.0, 0), 1.0)
         if progress > 0 {
-            let nsColor = pieColor(for: percent)
+            let nsColor = color ?? pieColor(for: percent)
             ctx.setFillColor(nsColor.cgColor)
 
             let startAngle = CGFloat.pi / 2

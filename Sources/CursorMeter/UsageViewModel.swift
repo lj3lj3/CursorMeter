@@ -21,6 +21,8 @@ private enum SettingsKey: String {
     case warningThreshold
     case criticalThreshold
     case menuBarDisplayMode
+    case menuBarIconStyle
+    case planUsageUnit
     case jumpEffectEnabled
     case jumpIntensity
     case jumpGlyphStyle
@@ -104,6 +106,41 @@ enum JumpIntensity: Int, Sendable, CaseIterable {
 enum JumpGlyphStyle: Int, Sendable, CaseIterable {
     case classic = 0   // ⚡ / 🚀
     case dollar = 1    // 💲 / 💸
+}
+
+/// Shape of the menu-bar icon. All styles render monochrome (`labelColor`) so
+/// the slot matches the rest of the menu bar; the Cursor cube marks which
+/// product the usage belongs to.
+enum MenuBarIconStyle: Int, Sendable, CaseIterable {
+    case pie = 0         // legacy pie chart, de-colored
+    case cursor = 1      // Cursor mark + underline progress bar
+    case ring = 2        // progress ring with the mark inside
+    case cursorText = 3  // Cursor mark + percent text
+    case badge = 4       // Cursor mark + corner progress badge
+
+    var label: String {
+        switch self {
+        case .pie:        return "Pie"
+        case .cursor:     return "Cursor + bar"
+        case .ring:       return "Ring + cursor"
+        case .cursorText: return "Cursor + percent"
+        case .badge:      return "Cursor + badge"
+        }
+    }
+}
+
+/// What the popover's primary usage figure shows. Popover-only — the menu bar
+/// keeps its own display-mode setting.
+enum PlanUsageUnit: Int, Sendable, CaseIterable {
+    case amount = 0
+    case percent = 1
+
+    var label: String {
+        switch self {
+        case .amount:  return "Amount"
+        case .percent: return "Percent"
+        }
+    }
 }
 
 /// Today-bar emphasis style for the weekly chart.
@@ -212,6 +249,9 @@ final class UsageViewModel {
     var criticalThreshold: Int = 90
     /// 0 = none, 1 = fraction (e.g. 120/500), 2 = percent (e.g. 24%)
     var menuBarDisplayMode: Int = 0
+    var menuBarIconStyle: MenuBarIconStyle = .pie
+    /// Unit of the popover's primary usage figure (popover only).
+    var planUsageUnit: PlanUsageUnit = .amount
     /// Unified toggle for app-status notifications (#83): new-release and
     /// refresh-failing. Independent of usage-threshold and jump settings.
     var appStatusNotificationEnabled: Bool = true
@@ -1287,6 +1327,16 @@ final class UsageViewModel {
         UserDefaults.standard.set(mode, for: .menuBarDisplayMode)
     }
 
+    func setMenuBarIconStyle(_ style: MenuBarIconStyle) {
+        menuBarIconStyle = style
+        UserDefaults.standard.set(style.rawValue, for: .menuBarIconStyle)
+    }
+
+    func setPlanUsageUnit(_ unit: PlanUsageUnit) {
+        planUsageUnit = unit
+        UserDefaults.standard.set(unit.rawValue, for: .planUsageUnit)
+    }
+
     func setAppStatusNotificationEnabled(_ enabled: Bool) {
         appStatusNotificationEnabled = enabled
         UserDefaults.standard.set(enabled, for: .appStatusNotificationEnabled)
@@ -1422,6 +1472,16 @@ final class UsageViewModel {
         if let val = defaults.object(for: .criticalThreshold) as? Int {
             criticalThreshold = max(min(val, 100), warningThreshold + 5)
         }
+        if let raw = defaults.object(for: .menuBarIconStyle) as? Int,
+           let style = MenuBarIconStyle(rawValue: raw)
+        {
+            menuBarIconStyle = style
+        }
+        if let raw = defaults.object(for: .planUsageUnit) as? Int,
+           let unit = PlanUsageUnit(rawValue: raw)
+        {
+            planUsageUnit = unit
+        }
         if let val = defaults.object(for: .menuBarDisplayMode) as? Int {
             menuBarDisplayMode = val
         } else {
@@ -1548,6 +1608,19 @@ final class UsageViewModel {
     nonisolated static func resolvedMenuBarDisplayMode(isPercentOnly: Bool, setting: Int) -> Int {
         if isPercentOnly && setting == 1 { return 2 }
         return setting
+    }
+
+    /// Display mode actually rendered, including the icon style's own text
+    /// requirement: `cursorText` carries no progress glyph of its own, so
+    /// "None" would leave the slot read-only at a glance — coerce it to percent.
+    nonisolated static func effectiveMenuBarDisplayMode(
+        isPercentOnly: Bool,
+        setting: Int,
+        iconStyle: MenuBarIconStyle
+    ) -> Int {
+        let mode = resolvedMenuBarDisplayMode(isPercentOnly: isPercentOnly, setting: setting)
+        if iconStyle == .cursorText, mode == 0 { return 2 }
+        return mode
     }
 
     // MARK: - Threshold Notifications
