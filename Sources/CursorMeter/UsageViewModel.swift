@@ -172,6 +172,29 @@ final class UsageViewModel {
     private(set) var ideAuthSuppressed: Bool = false
     var usageData: UsageDisplayData?
     var errorMessage: String?
+    /// Why the IDE credential chain is dead, if it is. Surfaced even while
+    /// cached numbers are still on screen: stale usage looks plausible, so
+    /// silence here reads as "up to date" rather than "not refreshing".
+    var credentialFailure: IDECredentialFailure?
+
+    /// Outcome of the most recent refresh attempt.
+    ///
+    /// Drives a standing line in the popover. Cached usage stays
+    /// plausible-looking indefinitely, so both the age of the numbers and the
+    /// result of the last attempt need stating — otherwise the absence of a
+    /// warning gets read as "up to date".
+    enum RefreshOutcome: Sendable {
+        case never
+        case succeeded(at: Date)
+        case failed(at: Date, reason: String)
+    }
+
+    /// Set on every completed attempt, success or failure. Failure keeps the
+    /// *data's* timestamp separate from the attempt's, so the line can show
+    /// "Updated 12:34 · last attempt failed: …" rather than implying the
+    /// numbers themselves are fresh.
+    private(set) var lastRefreshOutcome: RefreshOutcome = .never
+
     var isLoading = false
     /// Consecutive failed refreshes (any failure except the unauthorized →
     /// logout path). Drives the stale-data indicator (#77).
@@ -366,6 +389,10 @@ final class UsageViewModel {
     /// never read the developer's real state.vscdb; production wires the real
     /// CursorAppAuthReader in CursorMeterApp (same pattern as the #83 seams).
     @ObservationIgnored internal var ideCredentialProvider: (@Sendable () -> IDECredential?)?
+
+    /// Companion to `ideCredentialProvider`: reports why the last read came back
+    /// empty. Kept separate so existing tests keep injecting just a credential.
+    @ObservationIgnored internal var ideFailureProvider: (@Sendable () -> IDECredentialFailure?)?
 
     // MARK: - IDE availability & sign-in watch (#88)
 
@@ -638,6 +665,7 @@ final class UsageViewModel {
             let ideCredential = await Task.detached(operation: { provider() }).value
             setIDEAvailability(ideCredential != nil)
             if let ide = ideCredential {
+                credentialFailure = nil
                 do {
                     try await runRefreshAttempt(cookieHeader: ide.cookieHeader)
                     authState = .loggedIn
@@ -651,6 +679,11 @@ final class UsageViewModel {
                     await handleRefreshError(error)
                     return
                 }
+            } else {
+                // No credential at all — capture why, so the UI can say so
+                // rather than leaving stale numbers looking current.
+                let failureProvider = ideFailureProvider
+                credentialFailure = await Task.detached { failureProvider?() }.value
             }
         }
 
@@ -665,6 +698,9 @@ final class UsageViewModel {
                 authState = activeAuthSource == nil ? .loggedOut : .loginRequired
             }
             activeAuthSource = nil
+            lastRefreshOutcome = .failed(
+                at: Date(),
+                reason: credentialFailure?.message ?? "No Cursor session found")
             clearWeeklyDiscoveryCaches()
             resetWeeklyChartState()
             return
@@ -800,7 +836,9 @@ final class UsageViewModel {
             usageData = base.withOnDemandActive(isOnDemandLatched)
         }
         Log.info("Usage data refreshed")
-        lastSuccessAt = Date()
+        let now = Date()
+        lastSuccessAt = now
+        lastRefreshOutcome = .succeeded(at: now)
         consecutiveFailureCount = 0
         notificationFailureCount = 0
         // #112: recovery clears any lingering "connection trouble" banner —
@@ -877,6 +915,7 @@ final class UsageViewModel {
         }
         authState = .loginRequired
         usageData = nil
+        lastRefreshOutcome = .failed(at: Date(), reason: "Session expired")
         clearWeeklyDiscoveryCaches()
         resetWeeklyChartState()
         // Expired session has its own dedicated UI; stale must not leak
@@ -902,23 +941,36 @@ final class UsageViewModel {
     /// Non-auth refresh failures: forbidden and network/decoding errors.
     private func handleRefreshError(_ error: Error) async {
         if case APIError.forbidden = error {
-            errorMessage = "Access denied (subscription may be inactive)"
+            let message = "Access denied (subscription may be inactive)"
+            errorMessage = message
+            lastRefreshOutcome = .failed(at: Date(), reason: message)
             await registerRefreshFailure()
             Log.error("API returned 403 Forbidden")
             return
         }
         await registerRefreshFailure()
+
+        // URLSession failures are wrapped as `APIError.networkError(URLError)`
+        // by the API client, so direct cast misses offline cases. Unwrap both
+        // layers before deciding whether to schedule a background retry.
+        let urlError: URLError? = {
+            if let direct = error as? URLError { return direct }
+            if case APIError.networkError(let underlying) = error {
+                return underlying as? URLError
+            }
+            return nil
+        }()
+
+        // Recorded whether or not `errorMessage` ends up on screen: the
+        // popover states why the numbers are old on every failure, not only
+        // when there is nothing cached to show.
+        lastRefreshOutcome = .failed(
+            at: Date(),
+            reason: urlError?.code == .timedOut
+                ? "Request timed out"
+                : Self.fallbackErrorMessage(for: error))
+
         if usageData == nil {
-            // URLSession failures are wrapped as `APIError.networkError(URLError)`
-            // by the API client, so direct cast misses offline cases. Unwrap both
-            // layers before deciding whether to schedule a background retry.
-            let urlError: URLError? = {
-                if let direct = error as? URLError { return direct }
-                if case APIError.networkError(let underlying) = error {
-                    return underlying as? URLError
-                }
-                return nil
-            }()
             if urlError?.code == .notConnectedToInternet || urlError?.code == .networkConnectionLost {
                 errorMessage = "Waiting for network..."
                 scheduleNetworkRetry()

@@ -77,6 +77,15 @@ final class MenuBarPopoverViewController: NSViewController {
 
     // Stale-data indicator (hidden unless viewModel.isDataStale) (#77)
     private let staleLabel       = NSTextField(labelWithString: "")
+    // Why the credential chain produced nothing. Shown even while cached
+    // numbers still render — stale usage looks plausible, so staying quiet
+    // here reads as "up to date" rather than "not refreshing".
+    private let credentialLabel  = NSTextField(wrappingLabelWithString: "")
+    // Standing freshness line: when the numbers were last updated, and whether
+    // the latest attempt succeeded. Always visible — the stale banner only
+    // appears after five consecutive failures, and a quiet success is
+    // indistinguishable from "not refreshing at all".
+    private let refreshStatusLabel = NSTextField(wrappingLabelWithString: "")
     // Explicit MainActor isolation: DateFormatter is mutable/non-Sendable and
     // CI's stricter Sendable checking may not infer isolation for statics.
     @MainActor private static let staleTimeFormatter: DateFormatter = {
@@ -85,6 +94,22 @@ final class MenuBarPopoverViewController: NSViewController {
         f.dateStyle = .none
         return f
     }()
+
+    /// Date + time, for data that is not from today. A template rather than a
+    /// fixed pattern so field order and the 12/24h choice follow the locale.
+    @MainActor private static let freshnessDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("MMMdjmm")
+        return f
+    }()
+
+    /// Today's data needs only a time; anything older needs its date, which is
+    /// what makes stale numbers recognisable at a glance.
+    @MainActor private static func updatedText(_ date: Date) -> String {
+        Calendar.current.isDateInToday(date)
+            ? "Updated \(staleTimeFormatter.string(from: date))"
+            : "Updated \(freshnessDateFormatter.string(from: date))"
+    }
 
     // MARK: - Init
 
@@ -151,11 +176,38 @@ final class MenuBarPopoverViewController: NSViewController {
 
         // Stale-data indicator (#77)
         if viewModel.isDataStale {
-            let timeString = viewModel.lastSuccessAt.map(Self.staleTimeFormatter.string(from:)) ?? "—"
-            staleLabel.stringValue = "⚠️ Last updated \(timeString) — retrying every \(viewModel.refreshInterval.label)"
+            // The timestamp lives on the standing freshness line below; this
+            // adds only the retry cadence, which that line does not carry.
+            staleLabel.stringValue = "⚠️ Retrying every \(viewModel.refreshInterval.label)"
             staleLabel.isHidden = false
         } else {
             staleLabel.isHidden = true
+        }
+
+        // Credential failure — independent of the stale threshold, which needs
+        // five consecutive failures before it says anything. A dead chain is
+        // known on the first attempt, so it is reported immediately.
+        if let failure = viewModel.credentialFailure {
+            credentialLabel.stringValue = "⚠️ \(failure.message)"
+            credentialLabel.isHidden = false
+        } else {
+            credentialLabel.isHidden = true
+        }
+
+        // Freshness line — standing, so the age of the numbers is never in
+        // question. On failure it reports the *data's* timestamp and the
+        // attempt's reason, which are different things.
+        switch viewModel.lastRefreshOutcome {
+        case .never:
+            refreshStatusLabel.stringValue = "Not updated yet"
+            refreshStatusLabel.textColor = .secondaryLabelColor
+        case .succeeded(let at):
+            refreshStatusLabel.stringValue = Self.updatedText(at)
+            refreshStatusLabel.textColor = .secondaryLabelColor
+        case .failed(_, let reason):
+            let last = viewModel.lastSuccessAt.map(Self.updatedText) ?? "never"
+            refreshStatusLabel.stringValue = "\(last) · last attempt failed: \(reason)"
+            refreshStatusLabel.textColor = CircularProgressIcon.warnColor
         }
 
         // Update row (menu variant surfaces this as a menu item instead)
@@ -471,6 +523,33 @@ final class MenuBarPopoverViewController: NSViewController {
             for: .horizontal
         )
         dataStack.addArrangedSubview(staleLabel)
+
+        // --- Credential-failure notice (hidden by default) ---
+        credentialLabel.font      = NSFont.systemFont(ofSize: 12)
+        credentialLabel.textColor = .systemRed
+        credentialLabel.isHidden  = true
+        credentialLabel.lineBreakMode = .byWordWrapping
+        credentialLabel.maximumNumberOfLines = 3
+        // Same #87 constraint as the stale line: its width demand must stay
+        // below fittingSize priority so it wraps instead of inflating the
+        // content view past the popover frame.
+        credentialLabel.setContentCompressionResistancePriority(
+            .init(NSLayoutConstraint.Priority.fittingSizeCompression.rawValue - 1),
+            for: .horizontal
+        )
+        dataStack.addArrangedSubview(credentialLabel)
+
+        // --- Freshness line (always visible) ---
+        refreshStatusLabel.font      = NSFont.systemFont(ofSize: 11)
+        refreshStatusLabel.textColor = .secondaryLabelColor
+        refreshStatusLabel.lineBreakMode = .byWordWrapping
+        refreshStatusLabel.maximumNumberOfLines = 2
+        refreshStatusLabel.setAccessibilityIdentifier("refreshStatus")
+        refreshStatusLabel.setContentCompressionResistancePriority(
+            .init(NSLayoutConstraint.Priority.fittingSizeCompression.rawValue - 1),
+            for: .horizontal
+        )
+        dataStack.addArrangedSubview(refreshStatusLabel)
 
         // Make all rows in dataStack fill full width
         for arrangedView in dataStack.arrangedSubviews {
