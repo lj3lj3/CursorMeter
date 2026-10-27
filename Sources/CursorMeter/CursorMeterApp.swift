@@ -56,6 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // model) so the SPM test host can never read the real state.vscdb.
         let authReader = CursorAppAuthReader()
         viewModel.ideCredentialProvider = { authReader.read() }
+        // Read after `read()` — it is what records the reason.
+        viewModel.ideFailureProvider = { CursorAppAuthReader.lastFailure }
 
         // #88: IDE app presence + launcher for the sign-in inducement.
         viewModel.ideAppPresenceCheck = { Self.cursorIDEAppURL() != nil }
