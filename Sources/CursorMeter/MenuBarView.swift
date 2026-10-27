@@ -671,14 +671,15 @@ final class MenuBarPopoverViewController: NSViewController {
             badgeLabel.isHidden = true
         }
 
-        // Usage — the unit setting chooses the large figure; the value line
-        // beneath carries the other reading of the same number.
+        // Usage — the unit setting chooses the large figure; the line beneath
+        // carries the absolute amounts. It stays visible in percent mode too,
+        // where otherwise only a percentage would be on screen.
         usageTitleLabel.stringValue = data.usageLabel
         bigValueLabel.stringValue   = viewModel.planUsageUnit == .percent
             ? data.percentText
             : data.primaryUsageValue
         usageValueLabel.stringValue = data.usageText
-        usageValueLabel.isHidden    = viewModel.planUsageUnit == .percent
+        usageValueLabel.isHidden    = false
         refreshButton.isEnabled     = !viewModel.isLoading
         refreshButton.isHidden      = !showsActionRows || (viewModel.authState != .loggedIn)
 
